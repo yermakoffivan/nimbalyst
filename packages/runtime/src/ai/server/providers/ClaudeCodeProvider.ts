@@ -2405,7 +2405,7 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
         result.message = 'Tool call denied';
       }
 
-      console.log(`[canUseTool] #${callNum} EXIT tool="${toolName}" -> ${result.behavior} (${Date.now() - callStart}ms)`);
+      // console.log(`[canUseTool] #${callNum} EXIT tool="${toolName}" -> ${result.behavior} (${Date.now() - callStart}ms)`);
 
       return result;
     };
