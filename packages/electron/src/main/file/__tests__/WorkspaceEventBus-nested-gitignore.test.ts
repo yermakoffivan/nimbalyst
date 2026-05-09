@@ -107,7 +107,12 @@ function fireWatchEvent(eventType: string, filename: string) {
  *     nested/rootfs/etc/foo.txt
  */
 function buildIssue207Layout(): { workspace: string; cleanup: () => void } {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'wsbus-nested-'));
+  // Bus refuses workspaces below MIN_WORKSPACE_DEPTH=3, so on Linux CI where
+  // os.tmpdir() is /tmp (depth 1) we need an extra parent level.
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nimbalyst-test-'));
+  const parent = path.join(baseDir, 'parent');
+  fs.mkdirSync(parent, { recursive: true });
+  const workspace = fs.mkdtempSync(path.join(parent, 'wsbus-nested-'));
   const nested = path.join(workspace, 'nested');
   fs.mkdirSync(path.join(nested, '.git'), { recursive: true });
   fs.writeFileSync(path.join(nested, '.gitignore'), '/rootfs\n');
@@ -117,7 +122,7 @@ function buildIssue207Layout(): { workspace: string; cleanup: () => void } {
   fs.writeFileSync(path.join(nested, 'rootfs', 'etc', 'foo.txt'), '');
   return {
     workspace,
-    cleanup: () => fs.rmSync(workspace, { recursive: true, force: true }),
+    cleanup: () => fs.rmSync(baseDir, { recursive: true, force: true }),
   };
 }
 
