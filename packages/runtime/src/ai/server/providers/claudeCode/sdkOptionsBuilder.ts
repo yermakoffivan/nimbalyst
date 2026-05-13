@@ -245,11 +245,11 @@ export async function buildSdkOptions(
   // personal Anthropic account $100+.
   //
   // Defense-in-depth: the main-process bootstrap already deletes these from
-  // process.env before any code runs, but claude-agent-sdk 0.2.111 changed
-  // options.env from "replaces process.env" to "overlays process.env". We
-  // therefore also strip from every composed source and explicitly set the
-  // key from config.apiKey (or empty string) at the end, so nothing the SDK
-  // may inject from its own view of process.env can leak through.
+  // process.env before any code runs, and we also strip them from shell/settings
+  // overlays here. Do not set ANTHROPIC_API_KEY='' for login-based sessions:
+  // the Claude native binary treats the mere presence of that variable as an
+  // API-key auth signal, which can shadow a valid OAuth/CLI login and produce
+  // "Authentication failed" even though accountInfo() succeeds in settings.
   const { ANTHROPIC_API_KEY: _envAnthropicKey, OPENAI_API_KEY: _envOpenaiKey, ...sanitizedProcessEnv } = process.env;
   const { ANTHROPIC_API_KEY: _shellAnthropicKey, OPENAI_API_KEY: _shellOpenaiKey, ...sanitizedShellEnv } = shellEnv;
   const { ANTHROPIC_API_KEY: _settingsAnthropicKey, OPENAI_API_KEY: _settingsOpenaiKey, ...sanitizedSettingsEnv } = settingsEnv;
@@ -275,10 +275,6 @@ export async function buildSdkOptions(
     // the official CLI and removes that asymmetry. The user can still
     // override via their own env var if they want the original sdk-ts label.
     ...(process.env.CLAUDE_CODE_ENTRYPOINT == null && { CLAUDE_CODE_ENTRYPOINT: 'cli' }),
-    // Explicitly force-clear in case the SDK overlays its own process.env view.
-    // These will be re-set from config.apiKey below if the user has configured one.
-    ANTHROPIC_API_KEY: '',
-    OPENAI_API_KEY: '',
     ...(config.effortLevel && config.effortLevel !== DEFAULT_EFFORT_LEVEL && {
       CLAUDE_CODE_EFFORT_LEVEL: config.effortLevel
     }),

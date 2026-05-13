@@ -7,11 +7,11 @@
  * As of claude-agent-sdk 0.2.111, `options.env` overlays `process.env`
  * instead of replacing it, so defense-in-depth requires both:
  *   1. Stripping the keys from process.env at main-process bootstrap, AND
- *   2. Explicitly setting options.env.ANTHROPIC_API_KEY to either the user's
- *      configured key or '' so any overlay from the SDK's own process.env
- *      view is force-cleared.
+ *   2. Stripping those keys from every shell/settings overlay we compose.
  *
- * This test file covers step 2.
+ * These tests cover step 2. Login-based Claude Agent sessions must leave the
+ * keys absent entirely; setting ANTHROPIC_API_KEY='' shadows OAuth login in
+ * the native binary and breaks prompt execution.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -89,7 +89,7 @@ describe('buildSdkOptions env-key hardening', () => {
     }
   });
 
-  it('force-clears ANTHROPIC_API_KEY when no configured key is provided', async () => {
+  it('removes ANTHROPIC_API_KEY when no configured key is provided', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-leaked-from-shell';
     process.env.OPENAI_API_KEY = 'sk-leaked-from-shell';
 
@@ -98,8 +98,8 @@ describe('buildSdkOptions env-key hardening', () => {
       makeParams({ shellEnv: { ANTHROPIC_API_KEY: 'sk-ant-leaked-shellenv' } })
     );
 
-    expect(options.env.ANTHROPIC_API_KEY).toBe('');
-    expect(options.env.OPENAI_API_KEY).toBe('');
+    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(options.env.OPENAI_API_KEY).toBeUndefined();
   });
 
   it('ignores ANTHROPIC_API_KEY that settingsEnv might carry', async () => {
@@ -113,7 +113,7 @@ describe('buildSdkOptions env-key hardening', () => {
       })
     );
 
-    expect(options.env.ANTHROPIC_API_KEY).toBe('');
+    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(options.env.SOME_OTHER_FLAG).toBe('1');
   });
 
