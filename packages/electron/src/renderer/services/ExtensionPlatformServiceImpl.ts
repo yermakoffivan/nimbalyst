@@ -302,6 +302,8 @@ ${exportNames.map((name) => `export const ${name} = __mod?.${name};`).join('\n')
           aiTools: module.aiTools || module.default?.aiTools || [],
           nodes: module.nodes || module.default?.nodes || {},
           transformers: module.transformers || module.default?.transformers || {},
+          lexicalExtensions:
+            module.lexicalExtensions || module.default?.lexicalExtensions || {},
           hostComponents: module.hostComponents || module.default?.hostComponents || {},
           slashCommandHandlers: module.slashCommandHandlers || module.default?.slashCommandHandlers || {},
           panels: module.panels || module.default?.panels || {},

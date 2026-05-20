@@ -26,6 +26,8 @@ export default defineConfig({
         'react-dom',
         'react/jsx-runtime',
         'react/jsx-dev-runtime',
+        'lexical',
+        /^@lexical\//,
         /^@nimbalyst\/runtime/,
         '@nimbalyst/editor-context',
       ],
