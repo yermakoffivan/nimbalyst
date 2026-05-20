@@ -18,6 +18,7 @@
 const { parentPort, workerData } = require('worker_threads');
 const { PGlite } = require('@electric-sql/pglite');
 const path = require('path');
+const { serializeWorkerError } = require('./workerErrorSerialization');
 
 // WAL maintenance: total bytes across pg_wal/ that triggers an idle CHECKPOINT.
 // Why this number: PGLite's runtime settings are min_wal_size=80MB, max_wal_size=1GB
@@ -276,7 +277,8 @@ class PGLiteWorker {
         parentPort.postMessage({
           id: message.id,
           success: false,
-          error: error.message || String(error)
+          error: error.message || String(error),
+          errorData: serializeWorkerError(error)
         });
       }
     });

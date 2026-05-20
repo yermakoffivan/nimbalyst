@@ -3,6 +3,7 @@
  * Main thread wrapper that communicates with PGLite running in a worker
  */
 
+import * as fs from 'fs';
 import { Worker } from 'worker_threads';
 import { app, dialog } from 'electron';
 import path from 'path';
@@ -11,6 +12,7 @@ import { logger } from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 import { AnalyticsService } from '../services/analytics/AnalyticsService';
 import { DatabaseBackupService } from '../services/database/DatabaseBackupService';
+import { deserializeWorkerError } from './workerErrorSerialization';
 
 /**
  * Error that has already been shown to the user via a dialog.
@@ -265,7 +267,6 @@ export class PGLiteDatabaseWorker {
    * Delete the database directory for a fresh start
    */
   private async deleteDatabaseDirectory(): Promise<void> {
-    const fs = await import('fs');
     const dataDir = path.join(app.getPath('userData'), 'pglite-db');
     if (fs.existsSync(dataDir)) {
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -349,7 +350,7 @@ export class PGLiteDatabaseWorker {
           }
           pending.resolve(response.data);
         } else {
-          pending.reject(new Error(response.error || 'Unknown error'));
+          pending.reject(deserializeWorkerError(response.errorData, response.error));
         }
       }
     });
@@ -586,7 +587,6 @@ export class PGLiteDatabaseWorker {
         if (response.response === 1 && lockFilePath) {
           this.analytics.sendEvent('database_lock_ambiguous_force_unlock', { lockPid });
           try {
-            const fs = await import('fs');
             fs.unlinkSync(lockFilePath);
             logger.main.info(`[PGLite Worker] User chose to force-unlock; removed ${lockFilePath}. Retrying init.`);
             // Recreate worker + retry init. INIT_TIMEOUT_MS covers the
