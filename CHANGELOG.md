@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Seeded `nimbalyst-local/ai-actions.md` now includes example actions for launching sibling planning and worktree implementation sessions.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
