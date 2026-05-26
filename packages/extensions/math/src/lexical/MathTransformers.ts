@@ -15,11 +15,15 @@ import {
   MathInlineNode,
 } from './MathInlineNode';
 
-// Pandoc-style inline math rules: opening `$` must not be followed by whitespace,
-// closing `$` must not be preceded by whitespace, and closing `$` must not be
-// followed by a digit (so currency like `$7M ... $40M` is not matched as math).
+// Pandoc-style inline math import: opening `$` not followed by whitespace,
+// closing `$` not preceded by whitespace and not followed by a digit (so
+// currency like `$7M ... $40M` is not collapsed as math on paste/import).
 const INLINE_MATH_IMPORT_REGEXP = /\$(?!\$)(?!\s)([^$\n]*?[^$\s])\$(?!\$)(?!\d)/;
-const INLINE_MATH_SHORTCUT_REGEXP = /\$(?!\$)(?!\s)([^$\n]*?[^$\s])\$$/;
+// Typing-time shortcut is disabled. Auto-converting `$x$` fired the moment
+// the second `$` was typed, before the user could type the digit after it,
+// so currency text like "...$40M" was eagerly turned into math. Inline math
+// is now inserted via the slash menu instead.
+const INLINE_MATH_SHORTCUT_REGEXP = /(?!)/;
 const BLOCK_MATH_DELIMITER_REGEXP = /^[ \t]*(\${1,2})[ \t]*$/;
 
 export const INLINE_MATH_TRANSFORMER: TextMatchTransformer = {

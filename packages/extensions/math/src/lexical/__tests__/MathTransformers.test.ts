@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  INLINE_MATH_TRANSFORMER,
-} from '../MathTransformers';
+import { INLINE_MATH_TRANSFORMER } from '../MathTransformers';
 
 const importRe = INLINE_MATH_TRANSFORMER.importRegExp as RegExp;
-const shortcutRe = INLINE_MATH_TRANSFORMER.regExp as RegExp;
+const shortcutRe = INLINE_MATH_TRANSFORMER.regExp;
 
 describe('INLINE_MATH_TRANSFORMER import regex', () => {
   it('matches a simple inline math expression', () => {
@@ -42,15 +40,16 @@ describe('INLINE_MATH_TRANSFORMER import regex', () => {
   });
 });
 
-describe('INLINE_MATH_TRANSFORMER shortcut regex', () => {
-  it('matches inline math at end of line', () => {
-    const text = 'see $x = 1$';
-    const match = text.match(shortcutRe);
-    expect(match?.[1]).toBe('x = 1');
-  });
-
-  it('does not match currency at end of line', () => {
-    const text = 'we made $7M last year and $40M';
+describe('INLINE_MATH_TRANSFORMER typing shortcut', () => {
+  // The typing shortcut is intentionally disabled in favor of slash-menu
+  // insertion. The regex must never match user-typed text.
+  it.each([
+    'see $x = 1$',
+    'we made $7M last year and $40M',
+    'just typed $$',
+    '$',
+    '',
+  ])('does not match %j', (text) => {
     expect(text.match(shortcutRe)).toBeNull();
   });
 });
