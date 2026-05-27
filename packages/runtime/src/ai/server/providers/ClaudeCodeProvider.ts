@@ -1190,6 +1190,24 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
               ...(receivedCompactBoundary ? { contextCompacted: true } : {})
             };
             completeEmitted = true;
+
+            // Break out of the chunk loop. The for-await would otherwise stay
+            // alive indefinitely on sessions where the binary's task-list
+            // `<system-reminder>` hook keeps trying can_use_tool requests over
+            // closed stdin (each failure emits a tool_result(Stream closed)
+            // chunk that resets the grace timer). Witnessed in the wild as
+            // 13+ minute hangs after ScheduleWakeup-driven turns.
+            //
+            // Because this is a manual `while (true)` loop iterating via
+            // iterator.next() (not for-await), `break` does NOT call
+            // iterator.return(), so the SDK generator's internal state is
+            // preserved for the next turn. The binary subprocess stays alive
+            // for session resume (existing finally-block behavior).
+            //
+            // Teammate drainage at the next block reads from the same
+            // leadQuery iterator if pending messages exist, so that flow
+            // still works.
+            break;
           }
         }
       } catch (iterError) {

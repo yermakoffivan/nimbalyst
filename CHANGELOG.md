@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - CI `npm ci` no longer fails resolving `@nimbalyst/collab-adapters`; the workspace was missing from `package-lock.json` after the CollabContentAdapter commit.
-- Claude Code sessions now flip to "ready" the moment the model's turn finishes instead of sitting on the last output for up to 30 s while the SDK stdin grace period expired.
+- Claude Code sessions now flip to "ready" the moment the model's turn finishes instead of sitting on the last output for up to 30 s while the SDK stdin grace period expired. Also stops a log flood of `tool_result(Stream closed)` chunks that the binary's task-list reminder hook would emit indefinitely after `ScheduleWakeup`-driven turns.
 - Claude Code sessions no longer reset mid-conversation when the agent spawns sub-agents. Sub-agent assistant chunks carry their own `session_id`; the transcript adapter was capturing that as the lead's, corrupting resume on the next turn. (#451, #456, #457)
 - Project quick open now loads recent projects from stored recents instead of crawling every workspace on open.
 - Rebuild Extensions submenu now lists buildable extensions alphabetically.
