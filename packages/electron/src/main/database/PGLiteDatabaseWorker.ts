@@ -1202,8 +1202,20 @@ class ActiveDatabaseFacade implements AppDatabase {
     return this.active;
   }
 
+  /**
+   * Returns the active SQLite backend when SQLite is the live engine.
+   *
+   * In production this is now a `SQLiteDatabaseProxy` (worker-hosted) rather
+   * than an in-process `SQLiteDatabase`. The two share the same public shape
+   * for `query/exec/queryReadOnly/getStats/...`, but proxy-only methods
+   * (`pragmaRead`, `dashboardTableStats`, `getSlowQueries`, `getPerformance`,
+   * `walCheckpoint`) only exist on the proxy. Callers that need those should
+   * accept the proxy type directly. The return type is loosely typed as the
+   * SQLiteDatabase interface so existing call sites keep compiling; the
+   * dashboard / performance handlers cast to the proxy.
+   */
   getActiveSQLiteDatabase(): SQLiteDatabase | null {
-    return this.engine === 'sqlite' ? (this.active as SQLiteDatabase) : null;
+    return this.engine === 'sqlite' ? (this.active as unknown as SQLiteDatabase) : null;
   }
 
   initialize(): Promise<void> {

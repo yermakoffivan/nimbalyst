@@ -30,7 +30,7 @@ import {
 } from './DatabaseInstrumentation';
 import { WriteCoordinator } from './WriteCoordinator';
 import { runMigrations } from './MigrationRunner';
-import { translateAndBind } from './dialectTranslator';
+import { translateAndBind, translateSql } from './dialectTranslator';
 
 // better-sqlite3 ships its own types. We import the constructor lazily inside
 // `open()` so this module can be statically imported in environments where
@@ -46,6 +46,16 @@ function loadBetterSqlite(): SqliteCtor {
   const mod = require('better-sqlite3') as SqliteCtor | { default: SqliteCtor };
   cachedBetterSqlite = (mod as { default?: SqliteCtor }).default ?? (mod as SqliteCtor);
   return cachedBetterSqlite;
+}
+
+/**
+ * Optional override for the native better-sqlite3 binding path. Set by
+ * vitest.globalSetup.ts so unit tests can load a Node-ABI prebuild without
+ * disturbing the Electron-ABI binary in `node_modules/.../build/Release/`
+ * that the dev server depends on.
+ */
+function nativeBindingOverride(): string | undefined {
+  return process.env.NIMBALYST_BETTER_SQLITE3_NATIVE || undefined;
 }
 
 export interface SQLiteDatabaseOptions {
@@ -100,7 +110,11 @@ export class SQLiteDatabase {
     const dbPath = path.join(this.opts.dbDir, 'nimbalyst.sqlite');
 
     const Sqlite = loadBetterSqlite();
-    const handle = new Sqlite(dbPath, { fileMustExist: false });
+    const nativeBinding = nativeBindingOverride();
+    const handle = new Sqlite(
+      dbPath,
+      nativeBinding ? { fileMustExist: false, nativeBinding } : { fileMustExist: false },
+    );
 
     // Pragmas: WAL gives us concurrent reads + crash recovery; NORMAL fsync
     // is the standard for desktop apps (FULL is overkill for non-financial
@@ -160,6 +174,23 @@ export class SQLiteDatabase {
   async query<T = unknown>(sql: string, params: unknown[] = []): Promise<QueryResult<T>> {
     if (!this.initialized || !this.db) {
       throw new Error('SQLiteDatabase not initialized. Call initialize() first.');
+    }
+    // No-op explicit transaction control statements. Callers like
+    // PGLiteAgentMessagesStore issue `BEGIN`/`COMMIT`/`ROLLBACK` around
+    // multi-statement writes to get PG-style atomicity. On SQLite those
+    // writes route through WriteCoordinator, which already wraps every batch
+    // tick in a transaction — an inner BEGIN throws "cannot start a
+    // transaction within a transaction". Statements that land in the same
+    // tick are still atomic-by-coincidence, which matches what these stores
+    // need (back-to-back INSERT + UPDATE arrive within the ~5ms batch
+    // window). True multi-statement atomicity across awaited boundaries
+    // should use `runBackground` instead, not BEGIN/COMMIT.
+    const trimmed = sql.trim().toLowerCase();
+    if (trimmed === 'begin' || trimmed === 'commit' || trimmed === 'rollback'
+      || trimmed.startsWith('begin ') || trimmed.startsWith('begin;')
+      || trimmed.startsWith('commit ') || trimmed.startsWith('commit;')
+      || trimmed.startsWith('rollback ') || trimmed.startsWith('rollback;')) {
+      return { rows: [] } as QueryResult<T>;
     }
     const kind = classifyKind(sql);
     if (kind === 'read') {
@@ -296,7 +327,13 @@ export class SQLiteDatabase {
   }> {
     try {
       const Sqlite = loadBetterSqlite();
-      const handle = new Sqlite(backupPath, { fileMustExist: true, readonly: true });
+      const nativeBinding = nativeBindingOverride();
+      const handle = new Sqlite(
+        backupPath,
+        nativeBinding
+          ? { fileMustExist: true, readonly: true, nativeBinding }
+          : { fileMustExist: true, readonly: true },
+      );
       const integrity = (handle.pragma('integrity_check', { simple: true }) as string) ?? '';
       if (integrity !== 'ok') {
         handle.close();
@@ -429,84 +466,79 @@ export class SQLiteDatabase {
     }
   }
 
-  private runWrite<T>(sql: string, params: unknown[]): Promise<QueryResult<T>> {
-    if (!this.coordinator || !this.db) throw new Error('not open');
+  // EXPERIMENT (2026-05-28): bypass WriteCoordinator for hot-lane writes.
+  // The coordinator's batched-fsync design adds a setTimeout(batchWindowMs)
+  // hop to every write; in the test workload that hop turned into 100-228 ms
+  // of wall-clock delay (see _perf_slow_queries from a SQLite e2e run) which
+  // in turn blocks unrelated read IPC behind it. Routing writes directly
+  // through better-sqlite3 lets each write commit inline, paying its own
+  // fsync (cheap under WAL+NORMAL) but never queueing behind a batch tick.
+  // runBackground / bg-lane code still uses the coordinator unchanged.
+  private async runWrite<T>(sql: string, params: unknown[]): Promise<QueryResult<T>> {
+    if (!this.db) throw new Error('not open');
     const adapted = adaptSqlForSQLite(sql, params);
     const stack = captureStack();
     const inFlight = this.instrumentation.beginInFlight(adapted.sql, stack);
     const t0 = performance.now();
-    return this.coordinator
-      .write<QueryResult<T>>((db) => {
-        const stmt = db.prepare(adapted.sql);
-        if (stmtReturnsRows(stmt)) {
-          return { rows: stmt.all(...adapted.params) as T[] };
-        }
+    try {
+      const stmt = this.db.prepare(adapted.sql);
+      let result: QueryResult<T>;
+      if (stmtReturnsRows(stmt)) {
+        result = { rows: stmt.all(...adapted.params) as T[] };
+      } else {
         const info = stmt.run(...adapted.params);
-        // Many of our writes use `... RETURNING ...`; the all() path above
-        // covers those. Plain INSERT/UPDATE/DELETE returns an info object.
-        // We synthesize an empty rows array so callers don't have to branch.
-        return { rows: [], rowsAffected: info.changes } as unknown as QueryResult<T>;
-      })
-      .then(
-        (result) => {
-          inFlight.end();
-          this.instrumentation.recordQuery({
-            sql: adapted.sql,
-            params: adapted.params,
-            kind: 'write',
-            durationMs: performance.now() - t0,
-            rowsReturned: (result as QueryResult<T>).rows.length,
-            stack,
-          });
-          return result;
-        },
-        (err) => {
-          inFlight.end();
-          this.instrumentation.recordQuery({
-            sql: adapted.sql,
-            params: adapted.params,
-            kind: 'write',
-            durationMs: performance.now() - t0,
-            error: err as Error,
-            stack,
-          });
-          throw err;
-        },
-      );
+        result = { rows: [], rowsAffected: info.changes } as unknown as QueryResult<T>;
+      }
+      this.instrumentation.recordQuery({
+        sql: adapted.sql,
+        params: adapted.params,
+        kind: 'write',
+        durationMs: performance.now() - t0,
+        rowsReturned: result.rows.length,
+        stack,
+      });
+      return result;
+    } catch (err) {
+      this.instrumentation.recordQuery({
+        sql: adapted.sql,
+        params: adapted.params,
+        kind: 'write',
+        durationMs: performance.now() - t0,
+        error: err as Error,
+        stack,
+      });
+      throw err;
+    } finally {
+      inFlight.end();
+    }
   }
 
-  private runWriteExec(sql: string): Promise<void> {
-    if (!this.coordinator) throw new Error('not open');
+  private async runWriteExec(sql: string): Promise<void> {
+    if (!this.db) throw new Error('not open');
     const adapted = adaptSqlForSQLite(sql, []);
     const stack = captureStack();
     const inFlight = this.instrumentation.beginInFlight(adapted.sql, stack);
     const t0 = performance.now();
-    return this.coordinator
-      .write<void>((db) => {
-        db.exec(adapted.sql);
-      })
-      .then(
-        () => {
-          inFlight.end();
-          this.instrumentation.recordQuery({
-            sql: adapted.sql,
-            kind: 'write',
-            durationMs: performance.now() - t0,
-            stack,
-          });
-        },
-        (err) => {
-          inFlight.end();
-          this.instrumentation.recordQuery({
-            sql: adapted.sql,
-            kind: 'write',
-            durationMs: performance.now() - t0,
-            error: err as Error,
-            stack,
-          });
-          throw err;
-        },
-      );
+    try {
+      this.db.exec(adapted.sql);
+      this.instrumentation.recordQuery({
+        sql: adapted.sql,
+        kind: 'write',
+        durationMs: performance.now() - t0,
+        stack,
+      });
+    } catch (err) {
+      this.instrumentation.recordQuery({
+        sql: adapted.sql,
+        kind: 'write',
+        durationMs: performance.now() - t0,
+        error: err as Error,
+        stack,
+      });
+      throw err;
+    } finally {
+      inFlight.end();
+    }
   }
 }
 
@@ -608,13 +640,15 @@ function adaptSqlForSQLite(sql: string, params: unknown[]): SqlAdaptResult {
       params: [normalizeBindObject(params[0] as Record<string, unknown>)],
     };
   }
-  // Native better-sqlite3 positional `?` SQL (used by tests, the migrator's
-  // ad-hoc PRAGMA/SELECT calls, and any internal callsite that doesn't use
-  // PG `$N` placeholders). Pass params through positionally; the translator
-  // wouldn't have anything to do here and it would corrupt the bind shape.
+  // SQL with no `$N` placeholders is either a `?`-style native bind from a
+  // test/migrator call, or a param-free statement that may still contain
+  // PG-isms like `NOW() - INTERVAL '1 day'`. Always run the SQL-level
+  // translation (it's a no-op on `?`); only the bind-conversion path is
+  // skipped when there are no `$N` to rewrite.
   if (!HAS_POSITIONAL_DOLLAR_PARAM.test(sql)) {
+    const translated = translateSql(sql);
     return {
-      sql: applyPostTranslationRewrites(sql),
+      sql: applyPostTranslationRewrites(translated.sql),
       params: params.map(normalizeBindValue),
     };
   }

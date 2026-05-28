@@ -12,7 +12,17 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { PGlite } from '@electric-sql/pglite';
-import { MigrationOrchestrator } from '../MigrationOrchestrator';
+import { MigrationOrchestrator, type LivePgliteReader } from '../MigrationOrchestrator';
+
+async function openPgliteReader(dataDir: string): Promise<{ reader: LivePgliteReader; close: () => Promise<void> }> {
+  const db = new PGlite({ dataDir });
+  await (db as unknown as { waitReady: Promise<void> }).waitReady;
+  const reader: LivePgliteReader = {
+    queryReadOnly: async <T,>(sql: string, params?: unknown[]) =>
+      db.query<T>(sql, params) as Promise<{ rows: T[] }>,
+  };
+  return { reader, close: () => db.close() };
+}
 import { readBackendState } from '../BackendSelector';
 import { MigrationProgressReporter } from '../MigrationProgressReporter';
 
@@ -71,12 +81,14 @@ describe('MigrationOrchestrator', () => {
   it('runs the full migration, renames pglite-db, writes the backend flag', async () => {
     await buildFixturePglite();
 
-    const closeRunningPglite = vi.fn(async () => undefined);
+    const { reader, close } = await openPgliteReader(pgliteDir);
+    const closeRunningPglite = vi.fn(async () => { await close(); });
     const cutoverSpy = vi.fn(async () => undefined);
 
     const orch = new MigrationOrchestrator({
       userDataPath,
       schemaDir: SCHEMA_DIR,
+      pglite: reader,
       closeRunningPglite,
       onCutoverSuccess: cutoverSpy,
       log: () => {},
@@ -115,11 +127,13 @@ describe('MigrationOrchestrator', () => {
     // initialize will throw with no schema file present.
     const broadcast = vi.fn();
     const reporter = new MigrationProgressReporter({ throttleMs: 10, broadcast });
+    const { reader, close } = await openPgliteReader(pgliteDir);
 
     const orch = new MigrationOrchestrator({
       userDataPath,
       schemaDir: path.join(tmp, 'no-such-schemas'),
-      closeRunningPglite: async () => undefined,
+      pglite: reader,
+      closeRunningPglite: async () => { await close(); },
       reporter,
       log: () => {},
     });
@@ -138,9 +152,13 @@ describe('MigrationOrchestrator', () => {
   });
 
   it('preflight returns ok=false when no pglite-db directory exists', async () => {
+    const stubReader: LivePgliteReader = {
+      queryReadOnly: async () => ({ rows: [] }),
+    };
     const orch = new MigrationOrchestrator({
       userDataPath,
       schemaDir: SCHEMA_DIR,
+      pglite: stubReader,
       closeRunningPglite: async () => undefined,
     });
     const pre = await orch.preflight();
@@ -155,10 +173,12 @@ describe('MigrationOrchestrator', () => {
     fs.mkdirSync(stale, { recursive: true });
     fs.writeFileSync(path.join(stale, 'stale-marker.txt'), 'I was here');
 
+    const { reader, close } = await openPgliteReader(pgliteDir);
     const orch = new MigrationOrchestrator({
       userDataPath,
       schemaDir: SCHEMA_DIR,
-      closeRunningPglite: async () => undefined,
+      pglite: reader,
+      closeRunningPglite: async () => { await close(); },
     });
     await orch.run();
 

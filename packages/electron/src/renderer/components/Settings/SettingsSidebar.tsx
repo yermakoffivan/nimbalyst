@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
+import { useAtomValue } from 'jotai';
 import { createPortal } from 'react-dom';
 import { MaterialSymbol, getProviderIcon } from '@nimbalyst/runtime';
 import { useAlphaFeatures } from '../../hooks/useAlphaFeature';
 import { AlphaBadge, SETTINGS_ALPHA_TOOLTIP } from '../common/AlphaBadge';
+import { developerModeAtom } from '../../store/atoms/appSettings';
 
 export type SettingsCategory =
   | 'agent-permissions'
@@ -66,6 +68,9 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
   // Per-feature panels (Voice Mode, OpenCode, Copilot, Agent Features) are always visible
   // so users can discover and enable them; the panels themselves gate their controls.
   const alphaFeatures = useAlphaFeatures(['collaboration']);
+  // Database panel exposes the PGLite→SQLite migration. Hidden from non-dev
+  // users until we finish internal testing with other devs.
+  const developerMode = useAtomValue(developerModeAtom);
   const getStatusDot = (providerId: string): 'success' | 'warning' | 'error' | undefined => {
     const status = providerStatus[providerId];
     if (!status) return undefined;
@@ -107,6 +112,8 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
           id: 'database',
           name: 'Database',
           icon: <MaterialSymbol icon="database" size={16} />,
+          isAlpha: true,
+          hidden: !developerMode,
         },
         {
           id: 'voice-mode',

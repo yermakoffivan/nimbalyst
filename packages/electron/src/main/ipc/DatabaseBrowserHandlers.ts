@@ -192,6 +192,7 @@ export function registerDatabaseBrowserHandlers() {
                 minWalSize: string;
                 maxWalSize: string;
                 checkpointTimeout: string;
+                description: string;
             } | null = null;
             try {
                 const walResult = await database.query<{
@@ -219,6 +220,7 @@ export function registerDatabaseBrowserHandlers() {
                         minWalSize: row.min_wal_size,
                         maxWalSize: row.max_wal_size,
                         checkpointTimeout: row.checkpoint_timeout,
+                        description: 'PGLite has no background checkpointer; WAL is trimmed by explicit CHECKPOINT after init, before close, and when size exceeds 200 MB.',
                     };
                 }
             } catch (walErr) {

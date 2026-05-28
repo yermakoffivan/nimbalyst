@@ -22,7 +22,17 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { MigrationOrchestrator } from '../MigrationOrchestrator';
+import { MigrationOrchestrator, type LivePgliteReader } from '../MigrationOrchestrator';
+
+async function openPgliteReader(dataDir: string): Promise<{ reader: LivePgliteReader; close: () => Promise<void> }> {
+  const db = new PGlite({ dataDir });
+  await (db as unknown as { waitReady: Promise<void> }).waitReady;
+  const reader: LivePgliteReader = {
+    queryReadOnly: async <T,>(sql: string, params?: unknown[]) =>
+      db.query<T>(sql, params) as Promise<{ rows: T[] }>,
+  };
+  return { reader, close: () => db.close() };
+}
 import { SQLiteDatabase } from '../SQLiteDatabase';
 import { createSQLiteStoreAdapter } from '../SQLiteStoreAdapter';
 
@@ -214,10 +224,12 @@ describe('MigrationOrchestrator fixture round-trip', () => {
   it('feature parity holds after migration: FTS, sessions list, trackers, body cache, archived filter', async () => {
     await seedFixture();
 
+    const { reader, close } = await openPgliteReader(path.join(userDataPath, 'pglite-db'));
     const orch = new MigrationOrchestrator({
       userDataPath,
       schemaDir: SCHEMA_DIR,
-      closeRunningPglite: async () => undefined,
+      pglite: reader,
+      closeRunningPglite: async () => { await close(); },
       log: () => undefined,
     });
     const summary = await orch.run();

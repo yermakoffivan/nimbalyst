@@ -116,6 +116,7 @@ export function translateSql(sql: string): TranslateResult {
   out = stripToJsonbWrappers(out);
   out = rewriteJsonDeletes(out);
   out = rewriteJsonConcats(out);
+  out = rewriteGreatestLeast(out);
 
   // Step 6: drop PG type casts (::text, ::jsonb, ::bigint, ::text[] etc).
   // Done after the ANY/cast handling so the array-cast inside ANY() has
@@ -367,10 +368,73 @@ function rewriteJsonDeletes(sql: string): string {
   return out;
 }
 
+/**
+ * Translate PG's `GREATEST(a, b, ...)` / `LEAST(a, b, ...)` (which ignore
+ * NULL args) into SQLite. SQLite's scalar `max(a,b,...)` / `min(...)` exist
+ * but propagate NULL when any arg is null. Wrap in COALESCE so that when
+ * max/min returns NULL we fall back to the first non-null original arg —
+ * matching PG's "ignore nulls" semantics.
+ *
+ * Paren-aware; iterates innermost-out via the same scan-and-replace loop
+ * shape as `rewriteJsonbSet`. Handles any number of args.
+ */
+function rewriteGreatestLeast(sql: string): string {
+  const HEAD_RE = /\b(GREATEST|LEAST)\s*\(/gi;
+  let out = sql;
+  for (let iter = 0; iter < 64; iter++) {
+    HEAD_RE.lastIndex = 0;
+    const m = HEAD_RE.exec(out);
+    if (!m) return out;
+    const fn = m[1].toUpperCase() === 'LEAST' ? 'min' : 'max';
+    const openParenIdx = m.index + m[0].length - 1;
+    const closeParenIdx = findMatchingParen(out, openParenIdx);
+    if (closeParenIdx < 0) return out;
+    const inner = out.slice(openParenIdx + 1, closeParenIdx);
+    const args = splitTopLevelArgs(inner).map((a) => a.trim());
+    if (args.length < 2) {
+      // Single-arg or malformed; leave alone via a sentinel pass-through
+      // to avoid re-matching this site forever.
+      out =
+        out.slice(0, m.index) +
+        `__${fn === 'min' ? 'LEAST' : 'GREATEST'}_KEEP__` +
+        out.slice(m.index + m[1].length);
+      continue;
+    }
+    const replacement = `COALESCE(${fn}(${args.join(', ')}), ${args.join(', ')})`;
+    out = out.slice(0, m.index) + replacement + out.slice(closeParenIdx + 1);
+  }
+  return out
+    .replace(/__GREATEST_KEEP__/g, 'GREATEST')
+    .replace(/__LEAST_KEEP__/g, 'LEAST');
+}
+
 function rewriteJsonConcats(sql: string): string {
   let out = sql;
-  const concatPattern =
-    /(\([^()]+\)|json_remove\([^()]+\)|json_patch\([^()]+\)|jsonb_strip_nulls\([^()]+\)|COALESCE\([^()]+\)|[a-zA-Z_][a-zA-Z0-9_\.]*)\s*\|\|\s*(\([^()]+\)|json_remove\([^()]+\)|json_patch\([^()]+\)|jsonb_strip_nulls\([^()]+\)|json_object\([^()]+\)|\$p\d+|[a-zA-Z_][a-zA-Z0-9_\.]*)/g;
+  // Right side accepts `$N` and `$pN` because this rewrite runs before the
+  // `$N` -> `$pN` step. Left side accepts the same so symmetric `$1 || $2`
+  // patterns also translate.
+  //
+  // Each function-call alternative uses NESTED_PAREN_BODY, which matches a
+  // function body with up to ONE level of inner parens (e.g.
+  // `jsonb_strip_nulls(json_object('a', x))`). The previous `[^()]+` form
+  // refused any nested parens, so the regex backed off to the bare-identifier
+  // alternative — matching just `jsonb_strip_nulls` and leaving the
+  // `(json_object(...))` afterwards as dangling text, which produced invalid
+  // SQL like `json_patch(left, jsonb_strip_nulls)(json_object(...))`.
+  // The bare-identifier alternative now uses a negative lookahead so a name
+  // followed by `(` only matches via the function-call branches above it.
+  const NESTED_PAREN_BODY = String.raw`\([^()]*(?:\([^()]*\)[^()]*)*\)`;
+  const OPERAND = String.raw`(?:` +
+    String.raw`\([^()]+\)|` +
+    `json_remove${NESTED_PAREN_BODY}|` +
+    `json_patch${NESTED_PAREN_BODY}|` +
+    `jsonb_strip_nulls${NESTED_PAREN_BODY}|` +
+    `json_object${NESTED_PAREN_BODY}|` +
+    `COALESCE${NESTED_PAREN_BODY}|` +
+    String.raw`\$p?\d+|` +
+    String.raw`[a-zA-Z_][a-zA-Z0-9_\.]*(?!\s*\()` +
+    String.raw`)`;
+  const concatPattern = new RegExp(`(${OPERAND})\\s*\\|\\|\\s*(${OPERAND})`, 'g');
   for (let iter = 0; iter < 32; iter++) {
     const next = out.replace(
       concatPattern,

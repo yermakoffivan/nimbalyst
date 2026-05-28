@@ -94,6 +94,15 @@ export class SQLiteBackupService {
       if (!liveDb) {
         return { success: false, error: 'SQLite database not initialized' };
       }
+      // The captured handle reference can be closed under us while the
+      // backup is in flight (shutdown runs close() right after awaiting our
+      // caller). better-sqlite3's backup() schedules step() via setImmediate
+      // and throws "database connection is not open" from inside the
+      // immediate when the handle was closed in the meantime. Bail before
+      // we hand control to setImmediate.
+      if (!liveDb.open) {
+        return { success: false, error: 'SQLite database connection is closed' };
+      }
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const tempPath = path.join(this.backupDir, `temp-backup-${timestamp}.sqlite`);

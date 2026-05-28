@@ -6,6 +6,7 @@ import * as zlib from 'zlib';
 import { promisify } from 'util';
 import { database } from './database/PGLiteDatabaseWorker';
 import { logger } from './utils/logger';
+import { parseJsonObjectColumn } from './utils/jsonColumn';
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -240,13 +241,16 @@ export class HistoryManager {
         ORDER BY timestamp DESC
       `, [filePath]);
 
-      return result.rows.map(row => ({
-        timestamp: new Date(row.timestamp).toISOString(),
-        type: row.metadata?.type || 'manual',
-        size: row.size_bytes,
-        baseMarkdownHash: row.metadata?.baseMarkdownHash || '',
-        metadata: row.metadata
-      }));
+      return result.rows.map(row => {
+        const metadata = parseJsonObjectColumn(row.metadata);
+        return {
+          timestamp: new Date(row.timestamp).toISOString(),
+          type: metadata.type || 'manual',
+          size: row.size_bytes,
+          baseMarkdownHash: metadata.baseMarkdownHash || '',
+          metadata,
+        };
+      });
     } catch (error) {
       logger.main.error('[HistoryManager] Failed to list snapshots:', error);
       return [];
@@ -626,16 +630,17 @@ export class HistoryManager {
       const decompressed = await gunzip(compressed);
       const content = decompressed.toString('utf-8');
 
+      const metadata = parseJsonObjectColumn(row.metadata);
       return {
         id: tagId,
         filePath,
         content,
-        type: row.metadata.type || 'pre-edit',
-        status: row.metadata.status,
-        sessionId: row.metadata.sessionId,
-        toolUseId: row.metadata.toolUseId,
-        createdAt: new Date(row.metadata.createdAt),
-        updatedAt: new Date(row.metadata.updatedAt)
+        type: metadata.type || 'pre-edit',
+        status: metadata.status,
+        sessionId: metadata.sessionId,
+        toolUseId: metadata.toolUseId,
+        createdAt: new Date(metadata.createdAt),
+        updatedAt: new Date(metadata.updatedAt)
       };
     } catch (error) {
       logger.main.error('[HistoryManager] Failed to get tag:', error);
@@ -768,16 +773,17 @@ export class HistoryManager {
         const decompressed = await gunzip(compressed);
         const content = decompressed.toString('utf-8');
 
+        const metadata = parseJsonObjectColumn(row.metadata);
         tags.push({
-          id: row.metadata.tagId,
+          id: metadata.tagId,
           filePath: row.file_path,
           content,
-          type: row.metadata.type,
-          status: row.metadata.status,
-          sessionId: row.metadata.sessionId,
-          toolUseId: row.metadata.toolUseId,
-          createdAt: new Date(row.metadata.createdAt),
-          updatedAt: new Date(row.metadata.updatedAt)
+          type: metadata.type,
+          status: metadata.status,
+          sessionId: metadata.sessionId,
+          toolUseId: metadata.toolUseId,
+          createdAt: new Date(metadata.createdAt),
+          updatedAt: new Date(metadata.updatedAt)
         });
       }
 

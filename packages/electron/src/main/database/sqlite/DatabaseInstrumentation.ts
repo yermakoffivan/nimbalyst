@@ -402,22 +402,38 @@ export class DatabaseInstrumentation {
   }
 
   private persistSlowQuery(opts: RecordedQuery, shape: string, callSite: string | null): void {
-    if (!this.insertSlowStmt || !this.pruneSlowStmt) return;
+    if (!this.insertSlowStmt || !this.pruneSlowStmt || !this.db) return;
+    // recordQuery (and therefore this method) runs INSIDE queryReadOnly's
+    // `PRAGMA query_only = ON` scope when the slow query was a read. Writing
+    // to `_perf_slow_queries` under that pragma raises "attempt to write a
+    // readonly database" -- so flip query_only off for just the duration of
+    // the persist, then restore. This is safe because everything here runs
+    // synchronously on a single-threaded better-sqlite3 connection.
+    const db = this.db;
+    let wasReadOnly = false;
     try {
-      this.insertSlowStmt.run({
-        shape,
-        sqlSample: opts.sql.length > 2000 ? opts.sql.slice(0, 2000) + '...' : opts.sql,
-        paramsSample: opts.params ? safeStringifyParams(opts.params) : null,
-        durationMs: opts.durationMs,
-        kind: opts.kind,
-        rowsReturned: opts.rowsReturned ?? null,
-        rowsAffected: opts.rowsAffected ?? null,
-        callSite,
-        errorMessage: opts.error ? String(opts.error.message ?? opts.error) : null,
-      });
-      // Cheap pruning -- only DELETE when we're plausibly over the cap.
-      if (Math.random() < 0.01) {
-        this.pruneSlowStmt.run(this.slowQueryMaxRows);
+      wasReadOnly = Number(db.pragma('query_only', { simple: true })) > 0;
+      if (wasReadOnly) db.pragma('query_only = OFF');
+      try {
+        this.insertSlowStmt.run({
+          shape,
+          sqlSample: opts.sql.length > 2000 ? opts.sql.slice(0, 2000) + '...' : opts.sql,
+          paramsSample: opts.params ? safeStringifyParams(opts.params) : null,
+          durationMs: opts.durationMs,
+          kind: opts.kind,
+          rowsReturned: opts.rowsReturned ?? null,
+          rowsAffected: opts.rowsAffected ?? null,
+          callSite,
+          errorMessage: opts.error ? String(opts.error.message ?? opts.error) : null,
+        });
+        // Cheap pruning -- only DELETE when we're plausibly over the cap.
+        if (Math.random() < 0.01) {
+          this.pruneSlowStmt.run(this.slowQueryMaxRows);
+        }
+      } finally {
+        if (wasReadOnly) {
+          try { db.pragma('query_only = ON'); } catch { /* db may be closing */ }
+        }
       }
     } catch (err) {
       this.log('warn', `[DBInstr] failed to persist slow query: ${(err as Error).message}`);

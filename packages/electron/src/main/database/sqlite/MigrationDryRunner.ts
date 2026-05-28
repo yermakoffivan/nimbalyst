@@ -33,8 +33,12 @@ import {
   type MigrationSummary,
   type MigrationProgress,
   type PGLiteHandle,
+  type DryRunManifest,
 } from './PGLiteToSQLiteMigrator';
 import { MigrationProgressReporter } from './MigrationProgressReporter';
+
+/** Filename for the manifest written into each dry-run dir on success. */
+export const DRY_RUN_MANIFEST_FILENAME = '.dry-run-manifest.json';
 
 /**
  * The minimum surface the dry-runner needs from the live PGLite worker.
@@ -88,6 +92,24 @@ export class MigrationDryRunner {
     const log = this.opts.log ?? (() => {});
     const reporter = this.opts.reporter;
 
+    // Clean up any previous dry-run directories. We only keep the latest one
+    // so the user can adopt it; older ones are stale (PGLite has moved on).
+    try {
+      for (const entry of fs.readdirSync(this.opts.userDataPath)) {
+        if (entry.startsWith('sqlite-db.dry-run-')) {
+          const stale = path.join(this.opts.userDataPath, entry);
+          try {
+            fs.rmSync(stale, { recursive: true, force: true });
+            log('info', '[dry-run] removed stale dry-run dir', { stale });
+          } catch {
+            // Best effort; we'll create the new one regardless.
+          }
+        }
+      }
+    } catch {
+      // userDataPath unreadable; ignore — fs.mkdirSync below will fail loudly.
+    }
+
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const dryRunDir = path.join(this.opts.userDataPath, `sqlite-db.dry-run-${stamp}`);
     fs.mkdirSync(dryRunDir, { recursive: true });
@@ -124,6 +146,21 @@ export class MigrationDryRunner {
       const pgliteDir = path.join(this.opts.userDataPath, 'pglite-db');
       const pgliteDirBytes = fs.existsSync(pgliteDir) ? dirSizeBytes(pgliteDir) : 0;
 
+      // Persist the manifest so a later "adopt" can do a cursor-based catch-up
+      // copy of rows PGLite has gained since the dry-run.
+      if (summary.manifest) {
+        try {
+          fs.writeFileSync(
+            path.join(dryRunDir, DRY_RUN_MANIFEST_FILENAME),
+            JSON.stringify(summary.manifest, null, 2),
+          );
+        } catch (manifestErr) {
+          log('warn', '[dry-run] failed to write manifest', {
+            err: (manifestErr as Error).message,
+          });
+        }
+      }
+
       await sqlite.close();
       sqlite = null;
 
@@ -136,7 +173,10 @@ export class MigrationDryRunner {
         pgliteDirBytes,
       };
 
-      if (!this.opts.keepArtifacts) {
+      // Default: keep the dry-run SQLite dir on success so the user can
+      // optionally "adopt" it as their new active backend without re-running
+      // the long migration. Tests pass keepArtifacts: false to override.
+      if (this.opts.keepArtifacts === false) {
         try {
           fs.rmSync(dryRunDir, { recursive: true, force: true });
         } catch (rmErr) {
