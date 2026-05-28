@@ -98,6 +98,35 @@ import { registerSessionWorkspace, loadInitialSessionFileState } from '../../sto
 import { SESSION_PHASE_COLUMNS, setSessionPhaseAtom, type SessionPhase } from '../../store/atoms/sessionKanban';
 
 /**
+ * Detect a metadata value that's the artifact of `{...stringValue, ...}` -
+ * the spread treats each character of the string as a numeric-keyed
+ * property, producing objects with millions of `"0"`, `"1"`, ... entries.
+ * Spreading such an object via `...metadata` later in the render path
+ * throws V8's "RangeError: Too many properties to enumerate" and crashes
+ * the session view. Two known sessions in production hit this state via
+ * a legacy bad write upstream; the row should be cleaned DB-side, but
+ * the UI must not crash before that runs.
+ *
+ * Heuristic uses only the `in` operator (O(1) property lookups) so we
+ * never trigger the same enumeration that would re-throw the RangeError.
+ * If keys "0","1","2" all exist as own properties AND none of the real
+ * metadata field names do, treat as the spread-of-string artifact.
+ */
+function isCorruptedSpreadOfString(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  if (!('0' in obj) || !('1' in obj) || !('2' in obj)) return false;
+  // Known real metadata fields. Any one of them present means the object
+  // has at least some legitimate structure even if it also has stray
+  // numeric keys (which we'd rather keep than wipe).
+  const realKeys = ['tags', 'phase', 'metadata', 'tokenUsage', 'hasUnread', 'effortLevel', 'linkedTrackerItemIds'];
+  for (const k of realKeys) {
+    if (k in obj) return false;
+  }
+  return true;
+}
+
+/**
  * Expand @@[name](shortId) session mentions to @@[name](fullUuid).
  * Short IDs (5 chars) are used in the textarea for readability;
  * at send time we resolve them to full UUIDs for the agent.
@@ -434,6 +463,19 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
   const sessionData = useMemo(() => {
     if (!hasSessionData) return null;
     const snapshot = store.get(sessionStoreAtom(sessionId));
+    // Guard against corrupted metadata: some legacy rows have a metadata
+    // value that's the result of `{...stringValue, ...}`, producing an
+    // object with millions of numeric-string keys (each char of the
+    // original JSON as its own property). Spreading that into the
+    // memoized object below throws "RangeError: Too many properties to
+    // enumerate" and crashes the transcript. Sniff for the spread-of-
+    // string shape and fall back to an empty object rather than crashing.
+    // The underlying row should also be repaired DB-side, but this keeps
+    // the UI usable until then.
+    const rawMetadata = snapshot?.metadata;
+    const safeMetadata = isCorruptedSpreadOfString(rawMetadata)
+      ? {}
+      : (rawMetadata ?? {});
     return {
       ...(snapshot ?? {}),
       id: snapshot?.id ?? sessionId,
@@ -447,8 +489,8 @@ export const SessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscr
       // we don't subscribe to it.
       updatedAt: snapshot?.updatedAt ?? 0,
       metadata: {
-        ...(snapshot?.metadata ?? {}),
-        effortLevel: rawEffortLevel ?? (snapshot?.metadata as Record<string, unknown> | undefined)?.effortLevel ?? null,
+        ...safeMetadata,
+        effortLevel: rawEffortLevel ?? (safeMetadata as Record<string, unknown> | undefined)?.effortLevel ?? null,
         sessionStatus,
         currentTeammates: metadataTeammates,
         currentTodos,

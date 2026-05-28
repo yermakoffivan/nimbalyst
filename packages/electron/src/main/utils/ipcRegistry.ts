@@ -36,10 +36,37 @@ function getIpcMain(): any {
 }
 
 /**
+ * Slow-IPC threshold. Any `safeHandle` invocation that takes longer than
+ * this logs a `[IpcSlow]` line with the channel + duration so the main log
+ * surfaces accidental long-running handlers (e.g. a session:load that
+ * triggers a heavy transcript reparse, or a sessions:list that holds the
+ * write lane). 500ms is well below "user notices a hang" but above
+ * routine query latency.
+ *
+ * Configurable via `NIMBALYST_IPC_SLOW_MS` for ad-hoc tuning.
+ */
+const IPC_SLOW_THRESHOLD_MS = (() => {
+  const v = Number(process.env.NIMBALYST_IPC_SLOW_MS);
+  return Number.isFinite(v) && v > 0 ? v : 500;
+})();
+
+function ipcSlowLog(channel: string, durationMs: number): void {
+  // Avoid pulling the main logger here (would tangle this module's
+  // dependency graph at import time during tests); console.warn is captured
+  // by the main-log pipeline the same way every other (MAIN) warn line is.
+  console.warn(
+    `[IpcSlow] ${channel} took ${durationMs.toFixed(0)}ms (threshold ${IPC_SLOW_THRESHOLD_MS}ms)`,
+  );
+}
+
+/**
  * Safe ipcMain.handle() - prevents duplicate registration
  *
  * Use this instead of ipcMain.handle() for all invoke-style handlers.
  * If the handler is already registered, this will log a warning and skip.
+ *
+ * Also wraps the handler with slow-call instrumentation: any invocation
+ * longer than `IPC_SLOW_THRESHOLD_MS` logs `[IpcSlow] <channel> took ...ms`.
  */
 export function safeHandle(
   channel: string,
@@ -55,12 +82,25 @@ export function safeHandle(
     return;
   }
 
+  // Wrap so we can time every invocation. We can't observe how long the
+  // promise takes from outside `ipcMain.handle`, so the wrap is the only
+  // place to measure end-to-end main-side handler latency.
+  const instrumented = async (event: IpcMainInvokeEvent, ...args: any[]) => {
+    const t0 = performance.now();
+    try {
+      return await handler(event, ...args);
+    } finally {
+      const dur = performance.now() - t0;
+      if (dur >= IPC_SLOW_THRESHOLD_MS) ipcSlowLog(channel, dur);
+    }
+  };
+
   // Special case: electron-log registers its own '__ELECTRON_LOG__' handler
   // If we try to register after electron-log has already initialized, we'll get an error
   // This can happen during HMR or if the module is bundled multiple times
   try {
     registeredHandlers.add(channel);
-    ipcMain.handle(channel, handler);
+    ipcMain.handle(channel, instrumented);
   } catch (error: any) {
     if (error?.message?.includes('Attempted to register a second handler')) {
       console.warn(`[IPC] Handler registration failed (already exists): ${channel}`);

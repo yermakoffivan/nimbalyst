@@ -15,7 +15,6 @@
  *   - `db:migration:failed`   — payload = { phase, message, stack? }
  */
 
-import { BrowserWindow } from 'electron';
 import type { MigrationProgress, MigrationSummary, MigrationPhase } from './PGLiteToSQLiteMigrator';
 
 export const CHANNEL_PROGRESS = 'db:migration:progress';
@@ -36,6 +35,17 @@ export interface ReporterOptions {
 }
 
 function defaultBroadcast(channel: string, payload: unknown): void {
+  // Lazy-require Electron so this module remains import-safe in the SQLite
+  // worker thread (where `require('electron')` resolves but BrowserWindow is
+  // not the right surface to use, and worker-side callers always inject a
+  // custom broadcast that posts messages back to main via parentPort).
+  let BrowserWindow: typeof import('electron').BrowserWindow;
+  try {
+    BrowserWindow = require('electron').BrowserWindow;
+  } catch {
+    return;
+  }
+  if (!BrowserWindow) return;
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {

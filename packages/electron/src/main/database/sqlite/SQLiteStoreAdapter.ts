@@ -16,6 +16,14 @@
  */
 
 import type { SQLiteDatabase } from './SQLiteDatabase';
+import type { SQLiteDatabaseProxy } from './SQLiteDatabaseProxy';
+
+/**
+ * Either the in-process SQLiteDatabase (tests) or the worker-hosted proxy
+ * (production). Both expose the same async `query<T>(sql, params)` surface
+ * the dialect translator + FTS helpers need.
+ */
+type AnySqlite = SQLiteDatabase | SQLiteDatabaseProxy;
 
 export interface SQLiteStoreAdapterOptions {
   /**
@@ -83,7 +91,7 @@ export interface StoreDbAdapter {
  * already consume. Every `query()` call goes through the dialect translator.
  */
 export function createSQLiteStoreAdapter(
-  db: SQLiteDatabase,
+  db: AnySqlite,
   _opts: SQLiteStoreAdapterOptions = {},
 ): StoreDbAdapter {
   return {

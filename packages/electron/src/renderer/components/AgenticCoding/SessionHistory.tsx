@@ -2438,10 +2438,19 @@ const SessionHistoryComponent: React.FC<SessionHistoryProps> = ({
     fetchBlitzes();
   }, [blitzCreated, workspacePath, fetchBlitzes]);
 
-  // Fetch children for expanded workstreams
+  // Fetch children for expanded workstreams.
+  //
+  // No `isMounted` short-circuit on purpose: the effect deps include
+  // `sessionRegistry` and `workstreamChildrenCache`, which both churn from
+  // unrelated state (status indicators, etc). If the in-flight IPC takes long
+  // enough for the effect to re-fire (~195ms on SQLite vs ~30ms on PGLite),
+  // an `isMounted = false` cleanup would drop the fetched children even
+  // though the component is still mounted, leaving `workstream-child-item`
+  // empty in the sidebar. `pendingWorkstreamChildrenFetchesRef` already
+  // dedupes concurrent fetches for the same sessionId, so commits after
+  // re-render are safe; setState on an actually-unmounted component is a
+  // no-op in React 18+.
   useEffect(() => {
-    let isMounted = true;
-
     const workstreamChildrenNeedRefresh = (session: SessionItem) => {
       const cachedChildren = workstreamChildrenCache.get(session.id);
       if (!cachedChildren) {
@@ -2485,7 +2494,7 @@ const SessionHistoryComponent: React.FC<SessionHistoryProps> = ({
     );
 
     if (workstreamSessionsNeedingFetch.length === 0) {
-      return () => { isMounted = false; };
+      return;
     }
 
     const fetchChildren = async () => {
@@ -2537,8 +2546,6 @@ const SessionHistoryComponent: React.FC<SessionHistoryProps> = ({
           })
         );
 
-        if (!isMounted) return;
-
         const successfulResults = results.filter((result): result is { sessionId: string; children: SessionItem[] } => result !== null);
         if (successfulResults.length === 0) {
           return;
@@ -2572,8 +2579,6 @@ const SessionHistoryComponent: React.FC<SessionHistoryProps> = ({
     };
 
     fetchChildren();
-
-    return () => { isMounted = false; };
   }, [sessions, collapsedGroups, workspacePath, workstreamChildrenCache, sessionRegistry, showArchived]);
 
   if (loading) {

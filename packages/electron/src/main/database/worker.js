@@ -762,7 +762,8 @@ class PGLiteWorker {
       CREATE INDEX IF NOT EXISTS idx_session_files_workspace ON session_files(workspace_id);
       CREATE INDEX IF NOT EXISTS idx_session_files_workspace_file ON session_files(workspace_id, file_path);
       CREATE INDEX IF NOT EXISTS idx_session_files_unique ON session_files(session_id, file_path, link_type);
-      -- Optimized index for DISTINCT ON (file_path) ... ORDER BY file_path, timestamp DESC queries
+      -- Optimized index for "latest session per file" lookup
+      -- (ROW_NUMBER() OVER PARTITION BY file_path ORDER BY timestamp DESC)
       CREATE INDEX IF NOT EXISTS idx_session_files_uncommitted_lookup ON session_files(workspace_id, link_type, file_path, timestamp DESC);
     `);
 

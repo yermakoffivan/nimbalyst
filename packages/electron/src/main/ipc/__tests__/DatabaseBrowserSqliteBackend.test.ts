@@ -32,10 +32,7 @@ describe('DatabaseBrowserSqliteBackend', () => {
     fs.mkdirSync(sqliteDir, { recursive: true });
     sqlite = new SQLiteDatabase({ dbDir: sqliteDir, schemaDir: SCHEMA_DIR });
     await sqlite.initialize();
-    backend = new DatabaseBrowserSqliteBackend({
-      sqlite,
-      sqliteFilePath: path.join(sqliteDir, 'nimbalyst.sqlite'),
-    });
+    backend = new DatabaseBrowserSqliteBackend({ sqlite });
   });
 
   afterEach(async () => {

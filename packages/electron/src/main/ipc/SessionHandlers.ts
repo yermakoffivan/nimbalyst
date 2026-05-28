@@ -14,6 +14,7 @@ import path from "path";
 import { existsSync } from "fs";
 import { BrowserWindow } from 'electron';
 import { safeHandle, safeOn } from '../utils/ipcRegistry';
+import { parseJsonObjectColumn } from '../utils/jsonColumn';
 import type { SessionCreateResult } from '../../shared/ipc/types';
 import { TrayManager } from '../tray/TrayManager';
 import { AnalyticsService } from '../services/analytics/AnalyticsService';
@@ -130,13 +131,18 @@ async function getSessionsForUncommittedFiles(
             candidatePaths.push(`${workspacePath}/${relativePath}`);
         }
 
+        // Pick the most recent session per file_path. Rewritten from PG's
+        // `SELECT DISTINCT ON (file_path) ... ORDER BY file_path, timestamp DESC`
+        // to a window-function form that works under both PGLite and SQLite.
         const { rows } = await database.query<{ session_id: string; file_path: string }>(
-            `SELECT DISTINCT ON (file_path) session_id, file_path
-             FROM session_files
-             WHERE workspace_id = $1
-               AND link_type = 'edited'
-               AND file_path = ANY($2::text[])
-             ORDER BY file_path, timestamp DESC`,
+            `SELECT session_id, file_path FROM (
+               SELECT session_id, file_path,
+                      ROW_NUMBER() OVER (PARTITION BY file_path ORDER BY timestamp DESC) AS rn
+               FROM session_files
+               WHERE workspace_id = $1
+                 AND link_type = 'edited'
+                 AND file_path = ANY($2::text[])
+             ) ranked WHERE rn = 1`,
             [workspacePath, candidatePaths]
         );
 
@@ -636,7 +642,10 @@ export async function registerSessionHandlers() {
             }
 
             const children = rows.map((row: any) => {
-                const metadata = row.metadata ?? {};
+                // SQLite returns TEXT columns as raw strings; PGLite returns
+                // JSONB columns already parsed. Without this, phase/tags/
+                // linkedTrackerItemIds silently disappear from the sidebar.
+                const metadata = parseJsonObjectColumn(row.metadata);
                 return {
                     id: row.id,
                     title: row.title || 'Untitled Session',

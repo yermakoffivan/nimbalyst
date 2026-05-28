@@ -2860,8 +2860,14 @@ app.on('before-quit', async (event) => {
         }
 
         // Import database and create backup (with timeout)
-        const { getDatabase } = await import('./database/initialize');
+        const { getDatabase, stopPeriodicBackupTimer } = await import('./database/initialize');
         const db = getDatabase();
+
+        // Stop the 4h periodic backup timer before doing anything else.
+        // If it fires after we close the DB, better-sqlite3's setImmediate-
+        // driven backup step throws "database connection is not open" from
+        // inside an async chain we no longer await.
+        stopPeriodicBackupTimer();
 
         if (db) {
             const backupPromise = db.createBackup();

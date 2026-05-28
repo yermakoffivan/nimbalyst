@@ -6,33 +6,35 @@
  *   2. Renderer invokes `db:migration:get-status` to populate the pane.
  *   3. Renderer invokes `db:migration:preflight` before showing "Start".
  *   4. Renderer invokes `db:migration:start` to kick off the orchestrator.
- *   5. Main broadcasts `db:migration:progress` / `db:migration:phase` /
- *      `db:migration:complete` / `db:migration:failed` via
- *      `MigrationProgressReporter`. The renderer listens via `electronAPI.on`.
+ *   5. The SQLite worker (driven via `SQLiteDatabaseProxy`) runs the
+ *      orchestrator and emits `db:migration:progress` / `db:migration:phase`
+ *      / `db:migration:complete` / `db:migration:failed`. The proxy fans
+ *      those out to every BrowserWindow.
  *
- * The migration is a one-shot operation; we guard with a module-level
- * `runningMigration` flag and reject concurrent start requests.
+ * This file is now a thin shim — the orchestrator, dry-runner and adopter
+ * all live inside the SQLite worker so the synchronous bulk copy never
+ * blocks main. We keep the IPC channel names and response shapes intact so
+ * the renderer (`DatabasePanel.tsx`) doesn't change.
  */
 import { app } from 'electron';
 import * as path from 'path';
 import { safeHandle } from '../utils/ipcRegistry';
 import { logger } from '../utils/logger';
-import { database } from '../database/initialize';
+import { getMigrationProxy } from '../database/initialize';
 import { resolveBackend, readBackendState, commitRollbackToPglite } from '../database/sqlite/BackendSelector';
-import { MigrationOrchestrator } from '../database/sqlite/MigrationOrchestrator';
-import { MigrationProgressReporter } from '../database/sqlite/MigrationProgressReporter';
-import { MigrationDryRunner } from '../database/sqlite/MigrationDryRunner';
 import { AnalyticsService } from '../services/analytics/AnalyticsService';
 import * as fs from 'fs';
 
 let runningMigration = false;
 let runningDryRun = false;
+let runningAdopt = false;
 
 export function getSchemaDir(): string {
-  // In dev mode `__dirname` lands at packages/electron/src/main/ipc; the
-  // schema file ships alongside the sqlite module. In production the schemas
-  // are copied to the same relative location by the bundler.
-  return path.resolve(__dirname, '..', 'database', 'sqlite', 'schemas');
+  // Main is bundled to out/main/index.js, so __dirname is the main bundle root
+  // both in dev and packaged builds. Schemas are copied next to it by
+  // viteStaticCopy in electron.vite.config.ts. Keep this in sync with
+  // initialize.ts.
+  return path.resolve(__dirname, 'sqlite', 'schemas');
 }
 
 function getUserDataPath(): string {
@@ -70,13 +72,11 @@ export function registerMigrationHandlers(): void {
 
   safeHandle('db:migration:preflight', async () => {
     try {
-      const orch = new MigrationOrchestrator({
+      const proxy = await getMigrationProxy();
+      const result = await proxy.migrationPreflight({
         userDataPath: getUserDataPath(),
         schemaDir: getSchemaDir(),
-        closeRunningPglite: async () => undefined,
-        log: (level, msg, meta) => logger.main[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'](msg, meta),
       });
-      const result = await orch.preflight();
       return { success: true, ...result };
     } catch (err) {
       return { success: false, error: (err as Error).message };
@@ -88,38 +88,26 @@ export function registerMigrationHandlers(): void {
       return { success: false, error: 'Migration already running.' };
     }
     runningMigration = true;
-    const reporter = new MigrationProgressReporter();
-    const userDataPath = getUserDataPath();
     try {
-      const orch = new MigrationOrchestrator({
-        userDataPath,
+      const proxy = await getMigrationProxy();
+      const { summary } = await proxy.startMigration({
+        userDataPath: getUserDataPath(),
         schemaDir: getSchemaDir(),
-        closeRunningPglite: async () => {
-          // The production PGLite handle must be closed before we can re-open
-          // it in-process. The exported `database` is a PGLiteDatabaseWorker
-          // wrapper; calling close() terminates the worker thread.
-          try {
-            await database.close();
-          } catch (closeErr) {
-            logger.main.warn('[Migration] PGLite close failed; proceeding anyway', closeErr);
-          }
-        },
-        onCutoverSuccess: async () => {
-          // After cutover, the legacy PGLite handle is invalid. The renderer
-          // is expected to relaunch the app to pick up the new SQLiteDatabase
-          // under repositoryManager. We log and rely on the UI's "Continue"
-          // button to relaunch.
-          logger.main.info('[Migration] Cutover complete; relaunch required for SQLite to take effect');
-        },
-        reporter,
-        sendEvent: (eventName, properties) =>
-          AnalyticsService.getInstance().sendEvent(eventName, properties),
-        log: (level, msg, meta) => logger.main[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'](msg, meta),
       });
-      const summary = await orch.run();
+      AnalyticsService.getInstance().sendEvent('migration_completed', {
+        target_row_count: summary.totalRowsCopied,
+        duration_ms: Math.round(summary.durationMs),
+        tables_migrated: summary.tablesCopied.length,
+        spot_check_count: summary.spotCheckCount,
+        foreign_key_violations: summary.foreignKeyViolations,
+        integrity_check: summary.integrityCheck,
+      });
       return { success: true, summary };
     } catch (err) {
       logger.main.error('[Migration] failed', err);
+      AnalyticsService.getInstance().sendEvent('migration_failed', {
+        message: (err as Error).message.slice(0, 500),
+      });
       return { success: false, error: (err as Error).message };
     } finally {
       runningMigration = false;
@@ -130,9 +118,8 @@ export function registerMigrationHandlers(): void {
   // Runs the full migration into a throwaway directory while the user keeps
   // working. Returns real stats: row counts, per-table breakdown, duration,
   // FK + integrity status, on-disk SQLite size, and the pglite-db/ size for
-  // comparison. Never touches pglite-db, never writes the flag. The temp
-  // SQLite dir is removed on completion (success or failure).
-  safeHandle('db:migration:dry-run', async (_event, opts?: { keepArtifacts?: boolean }) => {
+  // comparison. Never touches pglite-db, never writes the flag.
+  safeHandle('db:migration:dry-run', async () => {
     if (runningDryRun) {
       return { success: false, error: 'Dry run already in progress.' };
     }
@@ -140,21 +127,12 @@ export function registerMigrationHandlers(): void {
       return { success: false, error: 'A real migration is in progress; dry run is unavailable.' };
     }
     runningDryRun = true;
-    const reporter = new MigrationProgressReporter();
     try {
-      const dryRunner = new MigrationDryRunner({
+      const proxy = await getMigrationProxy();
+      const { result } = await proxy.startDryRun({
         userDataPath: getUserDataPath(),
         schemaDir: getSchemaDir(),
-        // The exported `database` (PGLiteDatabaseWorker) already exposes the
-        // single-statement `queryReadOnly` surface the dry runner needs.
-        pglite: database,
-        reporter,
-        keepArtifacts: opts?.keepArtifacts === true,
-        log: (level, msg, meta) => logger.main[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'](msg, meta),
       });
-      const result = await dryRunner.run();
-      // Telemetry: opt-in like every other migration event; useful for fleet
-      // signals before we flip the cutover.
       AnalyticsService.getInstance().sendEvent('migration_dry_run_completed', {
         target_row_count: result.summary.totalRowsCopied,
         duration_ms: Math.round(result.summary.durationMs),
@@ -175,30 +153,63 @@ export function registerMigrationHandlers(): void {
     }
   });
 
+  // ----- Adopt dry-run (alpha) ---------------------------------------------
+  // Promote the most recent successful dry-run SQLite into the active backend
+  // via a cursor-based catch-up copy of anything PGLite has gained since the
+  // dry-run ran. Avoids re-paying the full migration cost.
+  safeHandle('db:migration:adopt-dry-run', async () => {
+    if (runningAdopt || runningMigration || runningDryRun) {
+      return { success: false, error: 'Another migration operation is in progress.' };
+    }
+    runningAdopt = true;
+    try {
+      const proxy = await getMigrationProxy();
+      const { result } = await proxy.adoptDryRun({
+        userDataPath: getUserDataPath(),
+        schemaDir: getSchemaDir(),
+      });
+      AnalyticsService.getInstance().sendEvent('migration_adopted_dry_run', {
+        rows_added: result.rowsAdded,
+        duration_ms: Math.round(result.durationMs),
+      });
+      return { success: true, result };
+    } catch (err) {
+      logger.main.error('[Adopt] failed', err);
+      AnalyticsService.getInstance().sendEvent('migration_adopt_failed', {
+        message: (err as Error).message.slice(0, 500),
+      });
+      return { success: false, error: (err as Error).message };
+    } finally {
+      runningAdopt = false;
+    }
+  });
+
+  // Expose whether an adoptable dry-run exists, so the UI can show the button.
+  safeHandle('db:migration:dry-run-status', async () => {
+    try {
+      const proxy = await getMigrationProxy();
+      const status = await proxy.dryRunStatus({
+        userDataPath: getUserDataPath(),
+        schemaDir: getSchemaDir(),
+      });
+      if (!status.available) return { success: true, available: false };
+      return {
+        success: true,
+        available: true,
+        completedAt: status.completedAt,
+        totalRows: status.totalRows,
+      };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  });
+
   safeHandle('db:migration:rollback', async () => {
     try {
-      const userDataPath = getUserDataPath();
-      const migrated = fs
-        .readdirSync(userDataPath)
-        .filter((d) => d.startsWith('pglite-db.migrated-'))
-        .sort()
-        .pop();
-      if (!migrated) {
-        return { success: false, error: 'No preserved PGLite directory to roll back to.' };
-      }
-      const pgliteDir = path.join(userDataPath, 'pglite-db');
-      const sqliteDir = path.join(userDataPath, 'sqlite-db');
-      if (fs.existsSync(pgliteDir)) {
-        return { success: false, error: 'pglite-db/ already exists; refusing to overwrite.' };
-      }
-      // Move SQLite aside (don't delete; user may want to reinspect)
-      if (fs.existsSync(sqliteDir)) {
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        fs.renameSync(sqliteDir, path.join(userDataPath, `sqlite-db.rolledback-${stamp}`));
-      }
-      fs.renameSync(path.join(userDataPath, migrated), pgliteDir);
-      commitRollbackToPglite(userDataPath);
-      return { success: true, restoredFrom: migrated };
+      const proxy = await getMigrationProxy();
+      const { restoredFrom } = await proxy.rollback({ userDataPath: getUserDataPath() });
+      commitRollbackToPglite(getUserDataPath());
+      return { success: true, restoredFrom };
     } catch (err) {
       return { success: false, error: (err as Error).message };
     }

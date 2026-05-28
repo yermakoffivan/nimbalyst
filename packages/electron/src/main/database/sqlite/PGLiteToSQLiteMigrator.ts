@@ -52,6 +52,7 @@ export interface PGLiteHandle {
 export type MigrationPhase =
   | 'preparing'
   | 'copying'
+  | 'rebuilding-fts'
   | 'verifying-counts'
   | 'verifying-integrity'
   | 'verifying-foreign-keys'
@@ -79,6 +80,32 @@ export interface MigrationSummary {
   integrityCheck: string;
   foreignKeyViolations: number;
   spotCheckCount: number;
+  /** Per-table cursor state for catch-up adoption; see DryRunManifest. */
+  manifest?: DryRunManifest;
+}
+
+/**
+ * Per-table state snapshot written by the dry-run, consumed by `catchUp` when
+ * the user adopts the dry-run SQLite as their active backend.
+ *
+ *   - `cursorMax`: max PK value seen for tables using cursor pagination —
+ *     anything newer than this in PGLite must be incrementally copied.
+ *   - `rows`: row count at the time of the dry-run; used for sanity warnings
+ *     in the UI ("X new rows since dry-run").
+ *   - `cursorColumn`: the PK column we used; null/absent means the table was
+ *     copied via OFFSET (composite PK) and adopt re-copies it whole.
+ */
+export interface DryRunManifest {
+  /** ISO timestamp of dry-run completion. */
+  completedAt: string;
+  /** Wall-clock duration of the dry-run, for diagnostics. */
+  durationMs: number;
+  perTable: Array<{
+    name: string;
+    rows: number;
+    cursorColumn?: string;
+    cursorMax?: string | number;
+  }>;
 }
 
 export interface MigrateOptions {
@@ -99,6 +126,11 @@ export interface MigrateOptions {
  * humans reading progress and for deterministic verification ordering. The
  * order roughly follows dependency depth (parents before children) so the
  * progress UI tells a coherent story.
+ *
+ * `ai_transcript_events` is intentionally absent: it's derived from
+ * `ai_agent_messages` by `TranscriptTransformer`. Migrating 100k+ rows of
+ * derived data is wasted time — the transformer regenerates on first session
+ * open after migration. See docs/TRANSCRIPT_ARCHITECTURE.md.
  */
 const COPY_TABLES: readonly string[] = [
   'worktrees',
@@ -114,9 +146,31 @@ const COPY_TABLES: readonly string[] = [
   'ai_session_wakeups',
   'super_loops',
   'super_iterations',
-  'ai_transcript_events',
   'collab_local_origins',
 ];
+
+/**
+ * Single-column primary keys we can use for cursor pagination. Tables not in
+ * this map (composite PKs, or empty/tiny) fall back to LIMIT/OFFSET. Cursor
+ * pagination is O(n) instead of O(n^2) and is the dominant speedup for the
+ * large message log.
+ */
+const CURSOR_COLUMNS: Record<string, string> = {
+  worktrees: 'id',
+  ai_sessions: 'id',
+  document_history: 'id',
+  session_files: 'id',
+  ai_agent_messages: 'id',
+  ai_tool_call_file_edits: 'id',
+  tracker_items: 'id',
+  queued_prompts: 'id',
+  ai_session_wakeups: 'id',
+  super_loops: 'id',
+  super_iterations: 'id',
+  // tracker_body_cache: composite (item_id, body_version) — small table, OFFSET fine
+  // tracker_transactions: 3 rows — OFFSET fine
+  // collab_local_origins: composite (org_id, document_id) — 11 rows, OFFSET fine
+};
 
 interface TargetColumn {
   name: string;
@@ -130,7 +184,7 @@ interface TargetColumn {
 export class PGLiteToSQLiteMigrator {
   async migrate(opts: MigrateOptions): Promise<MigrationSummary> {
     const t0 = performance.now();
-    const batchSize = opts.batchSize ?? 1000;
+    const batchSize = opts.batchSize ?? 5000;
     const spotCheckPerTable = opts.spotCheckPerTable ?? 5;
     const log = opts.log ?? (() => {});
     const sqliteHandle = opts.sqlite.getRawHandle();
@@ -148,6 +202,12 @@ export class PGLiteToSQLiteMigrator {
 
     let totalCopied = 0;
     const tableSummary: { name: string; rows: number }[] = [];
+    // Spot-check samples are captured DURING the copy so the verification step
+    // doesn't race against live PGLite writes (sync, tracker updates, etc.).
+    // Re-reading from PGLite at verify time would compare a frozen snapshot
+    // (what we copied) against whatever the row looks like *now* — leading to
+    // false "Spot check mismatch" failures during dry runs.
+    const samplesByTable = new Map<string, Record<string, unknown>[]>();
 
     opts.onProgress?.({
       phase: 'preparing',
@@ -161,15 +221,26 @@ export class PGLiteToSQLiteMigrator {
       elapsedMs: performance.now() - t0,
     });
 
+    // Drop the FTS5 mirror trigger on ai_agent_messages before bulk insert. It
+    // fires per-row and on a 1M+ row log is the dominant copy cost. We do a
+    // single FTS5 'rebuild' command after copy, which is dramatically faster
+    // than per-row trigger inserts, and then recreate the trigger so live
+    // app writes index correctly. See schemas/0001_initial.sql for the
+    // original trigger definition.
+    sqliteHandle.exec('DROP TRIGGER IF EXISTS ai_agent_messages_ai');
+
+    const manifestPerTable: DryRunManifest['perTable'] = [];
     for (let i = 0; i < pgliteCounts.length; i++) {
       const { name, rows: tableExpected } = pgliteCounts[i];
-      const copied = await this.copyTable({
+      const { copied, samples, cursorMax } = await this.copyTable({
         sourceTable: name,
         expectedRows: tableExpected,
         pglite: opts.pglite,
         sqlite: opts.sqlite,
         sqliteHandle,
         batchSize,
+        cursorColumn: CURSOR_COLUMNS[name],
+        sampleSize: Math.min(spotCheckPerTable, Math.max(1, tableExpected)),
         onBatchProgress: (tableRowsCopied) => {
           totalCopied = pgliteCounts
             .slice(0, i)
@@ -191,22 +262,111 @@ export class PGLiteToSQLiteMigrator {
         log,
       });
       tableSummary.push({ name, rows: copied });
+      if (samples.length > 0) samplesByTable.set(name, samples);
+      manifestPerTable.push({
+        name,
+        rows: copied,
+        cursorColumn: CURSOR_COLUMNS[name],
+        cursorMax,
+      });
       log('info', `[migrator] copied ${copied}/${tableExpected} rows from ${name}`);
     }
 
-    // Verify counts.
-    opts.onProgress?.({
-      phase: 'verifying-counts',
-      rowsCopied: totalCopied,
-      rowsExpected: totalExpected,
-      tableRowsCopied: 0,
-      tableRowsExpected: 0,
-      tablesCompleted: pgliteCounts.length,
-      tablesTotal: pgliteCounts.length,
-      percentOfTotal: 100,
-      elapsedMs: performance.now() - t0,
-    });
-    for (const { name, rows: expected } of pgliteCounts) {
+    // Reset the canonical_* transcript columns on every migrated session.
+    // The migrator deliberately doesn't copy `ai_transcript_events` (it's
+    // derived from `ai_agent_messages`; TranscriptTransformer regenerates on
+    // first session open). But we DID copy the canonical_transform_status /
+    // canonical_last_raw_message_id metadata that lives on `ai_sessions`,
+    // and those columns claim "transformed up to message N" when the actual
+    // events table is empty. On session open the transformer sees
+    // status='complete' + watermark at the tail and falls through to
+    // `resumeTransformation` with no new messages -> writes nothing -> empty
+    // UI. Forcing NULL here puts every migrated session back into the
+    // "never transformed" branch (`transformFromBeginning`), which is
+    // exactly what the comment on COPY_TABLES already promises.
+    const resetInfo = sqliteHandle
+      .prepare(
+        `UPDATE ai_sessions
+           SET canonical_transform_version = NULL,
+               canonical_last_raw_message_id = NULL,
+               canonical_last_transformed_at = NULL,
+               canonical_transform_status = NULL
+         WHERE canonical_transform_status IS NOT NULL
+            OR canonical_transform_version IS NOT NULL
+            OR canonical_last_raw_message_id IS NOT NULL
+            OR canonical_last_transformed_at IS NOT NULL`,
+      )
+      .run();
+    log(
+      'info',
+      `[migrator] reset canonical transcript metadata on ${Number(resetInfo.changes)} migrated sessions`,
+    );
+
+    // Rebuild ai_agent_messages_fts in chunks. The FTS5 'rebuild' command is
+    // a single synchronous statement that, on a 1M+ row content table, blocks
+    // the entire main process (better-sqlite3 is sync). Chunking by PK range
+    // with setImmediate yields between batches keeps the UI responsive and
+    // lets us emit progress.
+    const ftsTotal = pgliteCounts.find((t) => t.name === 'ai_agent_messages')?.rows ?? 0;
+    if (ftsTotal > 0) {
+      log('info', '[migrator] rebuilding ai_agent_messages_fts (chunked)');
+      const FTS_CHUNK_ROWS = 25_000;
+      const idRange = sqliteHandle
+        .prepare(`SELECT MIN(id) AS lo, MAX(id) AS hi FROM ai_agent_messages`)
+        .get() as { lo: number | null; hi: number | null };
+      if (idRange.lo !== null && idRange.hi !== null) {
+        const insertChunk = sqliteHandle.prepare(
+          `INSERT INTO ai_agent_messages_fts(rowid, content)
+             SELECT id, content FROM ai_agent_messages
+             WHERE id > ? AND id <= ?`,
+        );
+        let cursor = idRange.lo - 1;
+        let ftsCopied = 0;
+        while (cursor < idRange.hi) {
+          const nextCursor = Math.min(cursor + FTS_CHUNK_ROWS, idRange.hi);
+          const info = insertChunk.run(cursor, nextCursor);
+          ftsCopied += Number(info.changes);
+          cursor = nextCursor;
+          opts.onProgress?.({
+            phase: 'rebuilding-fts',
+            currentTable: 'ai_agent_messages_fts',
+            rowsCopied: totalCopied,
+            rowsExpected: totalExpected,
+            tableRowsCopied: ftsCopied,
+            tableRowsExpected: ftsTotal,
+            tablesCompleted: pgliteCounts.length,
+            tablesTotal: pgliteCounts.length,
+            percentOfTotal: 100,
+            elapsedMs: performance.now() - t0,
+          });
+          // Yield to the event loop so IPC, the renderer, and other handlers
+          // get a chance to run between chunks.
+          await new Promise<void>((r) => setImmediate(r));
+        }
+      }
+    }
+    sqliteHandle.exec(`
+      CREATE TRIGGER IF NOT EXISTS ai_agent_messages_ai AFTER INSERT ON ai_agent_messages BEGIN
+        INSERT INTO ai_agent_messages_fts(rowid, content) VALUES (new.id, new.content);
+      END;
+    `);
+
+    // Verify counts. Emit per-table progress so the UI shows which table is
+    // being counted (SELECT COUNT(*) can be slow on large tables).
+    for (let i = 0; i < pgliteCounts.length; i++) {
+      const { name, rows: expected } = pgliteCounts[i];
+      opts.onProgress?.({
+        phase: 'verifying-counts',
+        currentTable: name,
+        rowsCopied: totalCopied,
+        rowsExpected: totalExpected,
+        tableRowsCopied: 0,
+        tableRowsExpected: expected,
+        tablesCompleted: i,
+        tablesTotal: pgliteCounts.length,
+        percentOfTotal: 100,
+        elapsedMs: performance.now() - t0,
+      });
       const actual = sqliteHandle.prepare(`SELECT COUNT(*) AS c FROM ${quoteIdent(name)}`).get() as { c: number };
       if (actual.c !== expected) {
         throw new Error(
@@ -215,27 +375,30 @@ export class PGLiteToSQLiteMigrator {
       }
     }
 
-    // Spot-check N random rows per table.
-    opts.onProgress?.({
-      phase: 'verifying-spot-check',
-      rowsCopied: totalCopied,
-      rowsExpected: totalExpected,
-      tableRowsCopied: 0,
-      tableRowsExpected: 0,
-      tablesCompleted: pgliteCounts.length,
-      tablesTotal: pgliteCounts.length,
-      percentOfTotal: 100,
-      elapsedMs: performance.now() - t0,
-    });
+    // Spot-check captured samples (NOT a fresh read from PGLite — see the
+    // note on samplesByTable above for the race that motivates this).
     let spotCheckCount = 0;
-    for (const { name, rows: expected } of pgliteCounts) {
-      if (expected === 0) continue;
-      const n = Math.min(spotCheckPerTable, expected);
-      spotCheckCount += await this.spotCheckTable({
+    const tablesWithSamples = pgliteCounts.filter((t) => samplesByTable.has(t.name));
+    for (let i = 0; i < tablesWithSamples.length; i++) {
+      const { name } = tablesWithSamples[i];
+      const samples = samplesByTable.get(name)!;
+      opts.onProgress?.({
+        phase: 'verifying-spot-check',
+        currentTable: name,
+        rowsCopied: totalCopied,
+        rowsExpected: totalExpected,
+        tableRowsCopied: 0,
+        tableRowsExpected: samples.length,
+        tablesCompleted: i,
+        tablesTotal: tablesWithSamples.length,
+        percentOfTotal: 100,
+        elapsedMs: performance.now() - t0,
+      });
+      spotCheckCount += this.spotCheckCapturedSamples({
         table: name,
+        samples,
         pglite: opts.pglite,
         sqliteHandle,
-        sampleSize: n,
       });
     }
 
@@ -287,16 +450,149 @@ export class PGLiteToSQLiteMigrator {
       elapsedMs: performance.now() - t0,
     });
 
+    const durationMs = performance.now() - t0;
     const summary: MigrationSummary = {
       totalRowsCopied: totalCopied,
       tablesCopied: tableSummary,
-      durationMs: performance.now() - t0,
+      durationMs,
       integrityCheck: integrity,
       foreignKeyViolations: fkViolations.length,
       spotCheckCount,
+      manifest: {
+        completedAt: new Date().toISOString(),
+        durationMs,
+        perTable: manifestPerTable,
+      },
     };
     log('info', '[migrator] migration complete', summary);
     return summary;
+  }
+
+  /**
+   * Incrementally bring an already-migrated SQLite up to date with the live
+   * PGLite source. Called when the user adopts a dry-run as the new active
+   * backend. PGLite must be exclusively held (worker closed) so writes are
+   * paused while catchUp runs.
+   *
+   * Strategy per table:
+   *   - Cursor-paginated tables (large append-only logs): copy rows whose PK
+   *     is strictly greater than the dry-run high-water mark.
+   *   - Other tables (small + may have in-place updates): DELETE FROM and
+   *     full re-copy. Faster than diffing for the small sizes we have.
+   */
+  async catchUp(opts: {
+    pglite: PGLiteHandle;
+    sqlite: SQLiteDatabase;
+    manifest: DryRunManifest;
+    onProgress?: (progress: MigrationProgress) => void;
+    batchSize?: number;
+    log?: NonNullable<MigrateOptions['log']>;
+  }): Promise<{ rowsAdded: number; perTable: Array<{ name: string; added: number }> }> {
+    const t0 = performance.now();
+    const batchSize = opts.batchSize ?? 5000;
+    const log = opts.log ?? (() => {});
+    const sqliteHandle = opts.sqlite.getRawHandle();
+    if (!sqliteHandle) throw new Error('SQLiteDatabase must be initialized before catchUp');
+
+    sqliteHandle.pragma('foreign_keys = OFF');
+
+    const perTable: Array<{ name: string; added: number }> = [];
+    let totalAdded = 0;
+    const manifestByTable = new Map(opts.manifest.perTable.map((t) => [t.name, t]));
+    // Measure current PGLite counts so we can show "X new rows" in the UI.
+    const currentCounts = await this.measureSourceCounts(opts.pglite);
+    const totalExpectedNew = currentCounts.reduce((sum, t) => {
+      const old = manifestByTable.get(t.name)?.rows ?? 0;
+      return sum + Math.max(0, t.rows - old);
+    }, 0);
+
+    for (let i = 0; i < currentCounts.length; i++) {
+      const { name, rows: currentTotal } = currentCounts[i];
+      const stored = manifestByTable.get(name);
+      const cursorColumn = CURSOR_COLUMNS[name];
+      let added = 0;
+
+      opts.onProgress?.({
+        phase: 'copying',
+        currentTable: name,
+        rowsCopied: totalAdded,
+        rowsExpected: totalExpectedNew,
+        tableRowsCopied: 0,
+        tableRowsExpected: Math.max(0, currentTotal - (stored?.rows ?? 0)),
+        tablesCompleted: i,
+        tablesTotal: currentCounts.length,
+        percentOfTotal:
+          totalExpectedNew === 0 ? 100 : (totalAdded / totalExpectedNew) * 100,
+        elapsedMs: performance.now() - t0,
+      });
+
+      if (cursorColumn && stored?.cursorMax !== undefined) {
+        // Cursor catch-up: copy rows with PK > stored.cursorMax.
+        const { copied } = await this.copyTable({
+          sourceTable: name,
+          expectedRows: Math.max(0, currentTotal - stored.rows),
+          pglite: opts.pglite,
+          sqlite: opts.sqlite,
+          sqliteHandle,
+          batchSize,
+          cursorColumn,
+          initialCursor: stored.cursorMax,
+          sampleSize: 0,
+          onBatchProgress: (tableRowsCopied) => {
+            opts.onProgress?.({
+              phase: 'copying',
+              currentTable: name,
+              rowsCopied: totalAdded + tableRowsCopied,
+              rowsExpected: totalExpectedNew,
+              tableRowsCopied,
+              tableRowsExpected: Math.max(0, currentTotal - stored.rows),
+              tablesCompleted: i,
+              tablesTotal: currentCounts.length,
+              percentOfTotal:
+                totalExpectedNew === 0
+                  ? 100
+                  : ((totalAdded + tableRowsCopied) / totalExpectedNew) * 100,
+              elapsedMs: performance.now() - t0,
+            });
+          },
+          log,
+        });
+        added = copied;
+      } else {
+        // No cursor or no prior manifest entry: re-copy the whole table.
+        // Cheap for the small composite-PK tables we have. DELETE first so
+        // updated rows replace what was there.
+        sqliteHandle.exec(`DELETE FROM ${quoteIdent(name)}`);
+        const { copied } = await this.copyTable({
+          sourceTable: name,
+          expectedRows: currentTotal,
+          pglite: opts.pglite,
+          sqlite: opts.sqlite,
+          sqliteHandle,
+          batchSize,
+          cursorColumn,
+          sampleSize: 0,
+          onBatchProgress: () => { /* recopy progress is short; skip per-batch noise */ },
+          log,
+        });
+        added = copied - (stored?.rows ?? 0);
+      }
+
+      perTable.push({ name, added });
+      totalAdded += Math.max(0, added);
+      log('info', `[catchUp] ${name}: +${added} rows`);
+    }
+
+    sqliteHandle.pragma('foreign_keys = ON');
+    const fkViolations = sqliteHandle.prepare('PRAGMA foreign_key_check').all() as unknown[];
+    if (fkViolations.length > 0) {
+      throw new Error(
+        `catchUp: foreign_key_check failed (${fkViolations.length} violations); first: ${JSON.stringify(fkViolations[0])}`,
+      );
+    }
+
+    log('info', '[catchUp] complete', { totalAdded, durationMs: performance.now() - t0 });
+    return { rowsAdded: totalAdded, perTable };
   }
 
   // --------------------------------------------------------------------------
@@ -349,12 +645,26 @@ export class PGLiteToSQLiteMigrator {
     sqlite: SQLiteDatabase;
     sqliteHandle: BetterSqliteDb;
     batchSize: number;
+    /**
+     * Single-column PK to drive cursor pagination (WHERE col > $cursor ORDER
+     * BY col). When omitted falls back to LIMIT/OFFSET — only used for the
+     * tiny composite-PK tables. OFFSET is O(n^2) on large tables, hence the
+     * cursor path for everything > a few hundred rows.
+     */
+    cursorColumn?: string;
+    /**
+     * Start cursor for catch-up: skip rows with pk <= initialCursor. When
+     * omitted, copy from the beginning of the table.
+     */
+    initialCursor?: string | number;
+    /** Max rows to reservoir-sample for later spot-check. */
+    sampleSize: number;
     onBatchProgress: (rowsCopiedInTable: number) => void;
     log: NonNullable<MigrateOptions['log']>;
-  }): Promise<number> {
+  }): Promise<{ copied: number; samples: Record<string, unknown>[]; cursorMax?: string | number }> {
     if (opts.expectedRows === 0) {
       opts.onBatchProgress(0);
-      return 0;
+      return { copied: 0, samples: [] };
     }
 
     const target = this.getTargetColumns(opts.sqliteHandle, opts.sourceTable);
@@ -378,20 +688,56 @@ export class PGLiteToSQLiteMigrator {
       for (const r of rows) stmt.run(...r);
     });
 
-    // Stream batches. PGLite doesn't expose server-side cursors over the JS
-    // API, so we paginate with LIMIT/OFFSET. For large tables this is O(n^2)
-    // in the worst case (each batch re-scans rows it skipped), but PGLite is
-    // a single-process embedded engine — in practice the dominant cost is
-    // (de)serialization, and this stays well below user-tolerance for the
-    // expected DB sizes.
+    // Cursor-paginated path: WHERE pk > $cursor ORDER BY pk LIMIT N. This is
+    // O(n) total work across the whole table because each batch starts from
+    // an indexed position, not from row 0. For ai_agent_messages this is the
+    // difference between minutes and hours.
+    const useCursor = opts.cursorColumn !== undefined
+      && sourceCols.has(opts.cursorColumn);
+    if (opts.cursorColumn && !useCursor) {
+      opts.log(
+        'warn',
+        `[migrator] ${opts.sourceTable}: cursor column "${opts.cursorColumn}" not in source; falling back to OFFSET`,
+      );
+    }
+    const pkCol = useCursor ? quoteIdent(opts.cursorColumn!) : null;
+
     let copied = 0;
     let offset = 0;
-    while (offset < opts.expectedRows) {
-      const result = await opts.pglite.query<Record<string, unknown>>(
-        `SELECT * FROM ${quoteIdent(opts.sourceTable)} ORDER BY 1 LIMIT $1 OFFSET $2`,
-        [opts.batchSize, offset],
-      );
+    let cursor: unknown = opts.initialCursor !== undefined ? opts.initialCursor : null;
+    // Reservoir sample (Algorithm R): unbiased k-of-n sample with one pass.
+    const samples: Record<string, unknown>[] = [];
+    let seen = 0;
+    // Loop until PGLite returns 0 rows. We can't trust expectedRows as a hard
+    // stop because catch-up's expectedRows is "new rows since dry-run" which
+    // is just an estimate — actual new rows can be a few more (race with live
+    // writes between measure and copy).
+    while (true) {
+      const result = useCursor
+        ? cursor === null
+          ? await opts.pglite.query<Record<string, unknown>>(
+              `SELECT * FROM ${quoteIdent(opts.sourceTable)} ORDER BY ${pkCol} LIMIT $1`,
+              [opts.batchSize],
+            )
+          : await opts.pglite.query<Record<string, unknown>>(
+              `SELECT * FROM ${quoteIdent(opts.sourceTable)} WHERE ${pkCol} > $1 ORDER BY ${pkCol} LIMIT $2`,
+              [cursor, opts.batchSize],
+            )
+        : await opts.pglite.query<Record<string, unknown>>(
+            `SELECT * FROM ${quoteIdent(opts.sourceTable)} ORDER BY 1 LIMIT $1 OFFSET $2`,
+            [opts.batchSize, offset],
+          );
       if (result.rows.length === 0) break;
+
+      for (const row of result.rows) {
+        if (samples.length < opts.sampleSize) {
+          samples.push(row);
+        } else {
+          const j = Math.floor(Math.random() * (seen + 1));
+          if (j < opts.sampleSize) samples[j] = row;
+        }
+        seen++;
+      }
 
       const translatedBatch: unknown[][] = result.rows.map((row) =>
         this.translateRow(row, insertableCols),
@@ -414,7 +760,13 @@ export class PGLiteToSQLiteMigrator {
       });
 
       copied += result.rows.length;
-      offset += result.rows.length;
+      if (useCursor) {
+        // Advance cursor to the last PK we just read. PGLite returns the rows
+        // already ordered by pkCol, so the last row's PK is the new high-water.
+        cursor = result.rows[result.rows.length - 1][opts.cursorColumn!];
+      } else {
+        offset += result.rows.length;
+      }
       opts.onBatchProgress(copied);
 
       // Safety: if PGLite returned fewer rows than batchSize, we're done.
@@ -427,7 +779,10 @@ export class PGLiteToSQLiteMigrator {
         `[migrator] ${opts.sourceTable}: copied ${copied} but expected ${opts.expectedRows}`,
       );
     }
-    return copied;
+    const cursorMax = useCursor && cursor !== null
+      ? (cursor as string | number)
+      : undefined;
+    return { copied, samples, cursorMax };
   }
 
   private getTargetColumns(db: BetterSqliteDb, table: string): TargetColumn[] {
@@ -466,48 +821,71 @@ export class PGLiteToSQLiteMigrator {
     return out;
   }
 
-  private async spotCheckTable(opts: {
+  /**
+   * Compare pre-captured PGLite samples (taken during copy) against SQLite.
+   * Stable under concurrent PGLite writes — we don't re-read the source.
+   *
+   * `pglite` is still passed so we can look up the source columns (information
+   * schema, not table data), but only for the column-name set we need.
+   */
+  private spotCheckCapturedSamples(opts: {
     table: string;
+    samples: Record<string, unknown>[];
     pglite: PGLiteHandle;
     sqliteHandle: BetterSqliteDb;
-    sampleSize: number;
-  }): Promise<number> {
-    // PGLite syntax for random sampling. ORDER BY random() is fine for the
-    // small N we're sampling.
-    const pgRows = await opts.pglite.query<Record<string, unknown>>(
-      `SELECT * FROM ${quoteIdent(opts.table)} ORDER BY random() LIMIT $1`,
-      [opts.sampleSize],
-    );
-    if (pgRows.rows.length === 0) return 0;
+  }): number {
+    if (opts.samples.length === 0) return 0;
 
     const targetCols = this.getTargetColumns(opts.sqliteHandle, opts.table);
-    const sourceCols = await this.getSourceColumns(opts.pglite, opts.table);
-    // Spot-check only compares columns that exist in BOTH source and target —
-    // columns we didn't copy (because the source lacked them) just hold the
-    // SQLite default, which is by definition correct.
+    // Derive the source column set from the captured rows themselves: any key
+    // present in a sampled row was returned by PGLite and was eligible for
+    // copy. Columns the source lacked won't appear here.
+    const sourceCols = new Set<string>();
+    for (const r of opts.samples) {
+      for (const k of Object.keys(r)) sourceCols.add(k);
+    }
     const checkCols = targetCols.filter((c) => !c.generated && sourceCols.has(c.name));
-    // Find a primary-key-ish column to look up by. Use the first non-generated
-    // column whose name is `id`, `item_id`, or fall back to the first column.
-    const pkCol = checkCols.find((c) => c.name === 'id' || c.name === 'item_id')
-      || checkCols[0];
-    if (!pkCol) return 0;
+    if (checkCols.length === 0) return 0;
 
-    let checked = 0;
+    // Look up by the FULL primary key. Composite-PK tables like
+    // tracker_body_cache (item_id, body_version) have many rows per item_id;
+    // a partial-PK lookup returns whichever row SQLite picks, almost never
+    // the captured one — guaranteed false "mismatch" on the non-PK columns.
+    const pkCols = this.getPrimaryKeyColumns(opts.sqliteHandle, opts.table)
+      .filter((name) => checkCols.some((c) => c.name === name));
+    if (pkCols.length === 0) return 0;
+    const pkColMetas = pkCols.map((n) => checkCols.find((c) => c.name === n)!);
+
+    const where = pkCols.map((n) => `${quoteIdent(n)} = ?`).join(' AND ');
     const stmt = opts.sqliteHandle.prepare(
-      `SELECT * FROM ${quoteIdent(opts.table)} WHERE ${quoteIdent(pkCol.name)} = ?`,
+      `SELECT * FROM ${quoteIdent(opts.table)} WHERE ${where}`,
     );
-    for (const pgRow of pgRows.rows) {
-      const pkValue = translateValue(pgRow[pkCol.name], pkCol);
-      const sqliteRow = stmt.get(pkValue) as Record<string, unknown> | undefined;
+    let checked = 0;
+    for (const pgRow of opts.samples) {
+      const pkValues = pkColMetas.map((c) => translateValue(pgRow[c.name], c));
+      const sqliteRow = stmt.get(...pkValues) as Record<string, unknown> | undefined;
       if (!sqliteRow) {
         throw new Error(
-          `Spot check failed: ${opts.table}.${pkCol.name}=${String(pkValue)} not found in SQLite`,
+          `Spot check failed: ${opts.table} PK(${pkCols.join(',')})=(${pkValues.map(String).join(',')}) not found in SQLite`,
         );
       }
       assertRowsMatch(opts.table, pgRow, sqliteRow, checkCols);
       checked++;
     }
     return checked;
+  }
+
+  private getPrimaryKeyColumns(db: BetterSqliteDb, table: string): string[] {
+    // PRAGMA table_info returns each column's `pk` field as 0 (not PK) or
+    // 1..N (position in the composite PK, in declaration order). Sort by `pk`
+    // so composite PKs come out in the order SQLite expects.
+    const rows = db
+      .prepare(`PRAGMA table_info(${quoteIdent(table)})`)
+      .all() as { name: string; pk: number }[];
+    return rows
+      .filter((r) => r.pk > 0)
+      .sort((a, b) => a.pk - b.pk)
+      .map((r) => r.name);
   }
 }
 

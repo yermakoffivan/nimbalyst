@@ -197,6 +197,63 @@ describe('bindParams', () => {
   });
 });
 
+describe('translateSql - GREATEST / LEAST', () => {
+  it('rewrites GREATEST(a, b) into COALESCE(max(a,b), a, b)', () => {
+    const r = translateSql('SELECT GREATEST(x, y) FROM t');
+    expect(r.sql).toBe('SELECT COALESCE(max(x, y), x, y) FROM t');
+  });
+
+  it('rewrites LEAST(a, b) into COALESCE(min(a,b), a, b)', () => {
+    const r = translateSql('SELECT LEAST(x, 0) AS clamped FROM t');
+    expect(r.sql).toBe('SELECT COALESCE(min(x, 0), x, 0) AS clamped FROM t');
+  });
+
+  it('handles GREATEST with a nested COALESCE arg', () => {
+    const r = translateSql(
+      'SELECT GREATEST(s.updated_at, COALESCE(child.max, s.updated_at)) FROM t s',
+    );
+    expect(r.sql).toContain('COALESCE(max(s.updated_at, COALESCE(child.max, s.updated_at)), s.updated_at, COALESCE(child.max, s.updated_at))');
+  });
+});
+
+describe('translateSql - jsonb concat (||) with positional params', () => {
+  it('rewrites col || $N into json_patch even before $N -> $pN rewrite', () => {
+    const r = translateSql(
+      "UPDATE tracker_items SET data = tracker_items.data || $3 WHERE id = $1",
+    );
+    expect(r.sql).toContain('json_patch(tracker_items.data, $p3)');
+    expect(r.sql).not.toMatch(/data\s*\|\|/);
+  });
+
+  // Regression: TrackerPGLiteStore.applyOptimistic uses
+  // `expr || jsonb_strip_nulls(jsonb_build_object(...))` to preserve
+  // device-local data keys across optimistic rewrites. The right operand
+  // is a two-level nested function call. An earlier rewrite regex only
+  // allowed one paren level inside each function-call alternative, so it
+  // backed off to the bare-identifier alternative and matched just
+  // `jsonb_strip_nulls`, leaving `(json_object(...))` dangling and
+  // producing invalid SQL like `json_patch(left, jsonb_strip_nulls)(...)`.
+  // Better-sqlite3 surfaced this as "near '(': syntax error".
+  it('rewrites col - key || jsonb_strip_nulls(json_object(...)) safely', () => {
+    const r = translateSql(
+      `(EXCLUDED.data - 'linkedSessions' || jsonb_strip_nulls(jsonb_build_object('linkedSessions', tracker_items.data->'linkedSessions')))`,
+    );
+    expect(r.sql).toBe(
+      `(json_patch(json_remove(EXCLUDED.data, '$.linkedSessions'), jsonb_strip_nulls(json_object('linkedSessions', tracker_items.data->'linkedSessions'))))`,
+    );
+  });
+});
+
+describe('translateSql - param-free statements', () => {
+  it('still rewrites NOW() - INTERVAL when there are no $N params', () => {
+    const r = translateSql(
+      "UPDATE queued_prompts SET status = 'completed' WHERE created_at < NOW() - INTERVAL '1 day'",
+    );
+    expect(r.sql).toContain("strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')");
+    expect(r.sql).not.toContain("'1 day'");
+  });
+});
+
 describe('translateAndBind - integration', () => {
   it('round-trips a realistic UPDATE with NOW() and casts', () => {
     const { sql, binds } = translateAndBind(

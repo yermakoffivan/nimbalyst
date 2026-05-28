@@ -27,15 +27,32 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { PGlite } from '@electric-sql/pglite';
 import { SQLiteDatabase } from './SQLiteDatabase';
 import {
   PGLiteToSQLiteMigrator,
   type MigrationProgress,
   type MigrationSummary,
+  type PGLiteHandle,
 } from './PGLiteToSQLiteMigrator';
 import { MigrationProgressReporter } from './MigrationProgressReporter';
 import { commitMigrationToSqlite } from './BackendSelector';
+
+/**
+ * Read surface satisfied by the live PGLiteDatabaseWorker. Mirrors the adapter
+ * used by MigrationDryRunner and MigrationAdopter: the orchestrator reads
+ * from the live worker rather than closing it and opening an in-process
+ * PGLite handle, because `new PGlite()` in-process triggers PGlite's WASM
+ * env to re-`require()` the main bundle, which re-evaluates the bundled
+ * `electron-log` module and crashes with "Attempted to register a second
+ * handler for '__ELECTRON_LOG__'".
+ */
+export interface LivePgliteReader {
+  queryReadOnly<T = unknown>(
+    sql: string,
+    params?: unknown[],
+    timeoutMs?: number,
+  ): Promise<{ rows: T[] }>;
+}
 
 export interface OrchestratorOptions {
   /** User data path (`app.getPath('userData')` in production). */
@@ -43,9 +60,16 @@ export interface OrchestratorOptions {
   /** Absolute path to the SQLite schema directory. */
   schemaDir: string;
   /**
-   * Called to shut down whatever PGLite handle the main process currently
-   * holds before we open one ourselves. Production wiring closes the
-   * PGLiteDatabaseWorker; tests can supply a no-op.
+   * Live PGLite worker. We read the migration source via its `queryReadOnly`
+   * surface (single-statement, bounded timeout) rather than opening a second
+   * in-process PGLite handle — see `LivePgliteReader` above for the
+   * `__ELECTRON_LOG__` re-registration trap that motivates this.
+   */
+  pglite: LivePgliteReader;
+  /**
+   * Close the live PGLite worker. Called only after the migrator has finished
+   * reading and the SQLite copy is verified; the rename can't happen while
+   * the worker holds the directory.
    */
   closeRunningPglite: () => Promise<void>;
   /**
@@ -147,21 +171,11 @@ export class MigrationOrchestrator {
     }
     fs.mkdirSync(sqliteDir, { recursive: true });
 
-    let pglite: PGlite | null = null;
     let sqlite: SQLiteDatabase | null = null;
     let summary: MigrationSummary | null = null;
-    let phase = 'closing-pglite';
+    let phase = 'opening-sqlite';
     try {
-      // 1. Close whatever PGLite handle the main process holds.
-      await this.opts.closeRunningPglite();
-
-      // 2. Open PGLite read-only against the source directory.
-      phase = 'opening-pglite';
-      pglite = new PGlite({ dataDir: pgliteDir });
-      await (pglite as unknown as { waitReady: Promise<void> }).waitReady;
-
-      // 3. Open fresh SQLite (initialize runs the schema bootstrap).
-      phase = 'opening-sqlite';
+      // 1. Open fresh SQLite (initialize runs the schema bootstrap).
       sqlite = new SQLiteDatabase({
         dbDir: sqliteDir,
         schemaDir: this.opts.schemaDir,
@@ -170,27 +184,36 @@ export class MigrationOrchestrator {
       });
       await sqlite.initialize();
 
-      // 4. Run the migrator.
+      // 2. Run the migrator against the LIVE PGLite worker. Writes that
+      // land in PGLite during the copy will be missed by SQLite — that's
+      // acceptable for the alpha cutover path because the migration UI
+      // already asks the user to start it intentionally. The dry-run +
+      // adopt flow uses catch-up to close that gap; this orchestrator
+      // path takes the simpler one-shot stance. See `LivePgliteReader`
+      // above for why we don't open PGLite in-process here.
       phase = 'migrating';
       const migrator = this.opts.migrator ?? new PGLiteToSQLiteMigrator();
       const onProgress: ((p: MigrationProgress) => void) | undefined = reporter
         ? reporter.onProgress
         : undefined;
+      const adapter = buildReadOnlyAdapter(this.opts.pglite);
       summary = await migrator.migrate({
-        pglite: pglite as unknown as Parameters<PGLiteToSQLiteMigrator['migrate']>[0]['pglite'],
+        pglite: adapter,
         sqlite,
         onProgress,
         log,
       });
 
-      // 5. Close both before doing filesystem renames.
-      phase = 'closing-for-cutover';
+      // 3. Close SQLite cleanly before the rename.
+      phase = 'closing-sqlite';
       await sqlite.close();
       sqlite = null;
-      await pglite.close();
-      pglite = null;
 
-      // 6. Cutover. Rename PGLite directory aside, write the backend flag.
+      // 4. Close the live PGLite worker so we can rename its dir.
+      phase = 'closing-pglite';
+      await this.opts.closeRunningPglite();
+
+      // 5. Cutover. Rename PGLite directory aside, write the backend flag.
       // Per the plan: if the rename fails (e.g. Windows file-in-use), we still
       // proceed — the flag points at SQLite, and a leftover pglite-db/ is
       // harmless. We log and surface it but don't fail the migration.
@@ -239,12 +262,11 @@ export class MigrationOrchestrator {
         message: message.slice(0, 500),
       });
 
-      // Best-effort cleanup. We're conservative about not touching pglite-db.
+      // Best-effort cleanup. We're conservative about not touching pglite-db;
+      // the live worker is still serving the app, don't take it down on
+      // failure. Just clean up the partial sqlite-db dir.
       try {
         if (sqlite) await sqlite.close();
-      } catch { /* ignore */ }
-      try {
-        if (pglite) await pglite.close();
       } catch { /* ignore */ }
       try {
         if (fs.existsSync(sqliteDir)) {
@@ -259,6 +281,20 @@ export class MigrationOrchestrator {
       throw err;
     }
   }
+}
+
+function buildReadOnlyAdapter(reader: LivePgliteReader): PGLiteHandle {
+  return {
+    async query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }> {
+      return reader.queryReadOnly<T>(sql, params, 30_000);
+    },
+    async exec(_sql: string): Promise<unknown> {
+      throw new Error('MigrationOrchestrator adapter is read-only; exec() is not supported');
+    },
+    async close(): Promise<void> {
+      // No-op: the live worker keeps running until we explicitly close it.
+    },
+  };
 }
 
 // ----------------------------------------------------------------------------

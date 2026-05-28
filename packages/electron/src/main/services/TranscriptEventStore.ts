@@ -126,6 +126,59 @@ export function createTranscriptEventStore(
       return rowToEvent(rows[0]);
     },
 
+    async insertEvents(events): Promise<TranscriptEvent[]> {
+      await ensureReady();
+      if (events.length === 0) return [];
+
+      // Build one multi-row INSERT so the whole batch crosses the worker
+      // boundary in a single IPC round-trip and writes inside a single
+      // transaction. PG-style `$N` placeholders are translated to `?` by the
+      // SQLite dialect translator; PGLite consumes them natively.
+      //
+      // SQLite's default `SQLITE_MAX_VARIABLE_NUMBER` is 32,766 on modern
+      // builds. With 11 columns/row, chunking at 1,000 rows/call leaves
+      // plenty of headroom and keeps individual transactions bounded for
+      // progress observability on very large sessions.
+      const COLS_PER_ROW = 11;
+      const CHUNK_ROWS = 1_000;
+      const all: TranscriptEvent[] = [];
+      for (let start = 0; start < events.length; start += CHUNK_ROWS) {
+        const slice = events.slice(start, start + CHUNK_ROWS);
+        const valueClauses: string[] = [];
+        const params: any[] = [];
+        for (let i = 0; i < slice.length; i++) {
+          const base = i * COLS_PER_ROW;
+          const ph: string[] = [];
+          for (let c = 1; c <= COLS_PER_ROW; c++) ph.push(`$${base + c}`);
+          valueClauses.push(`(${ph.join(', ')})`);
+          const e = slice[i];
+          params.push(
+            e.sessionId,
+            e.sequence,
+            e.createdAt,
+            e.eventType,
+            e.searchableText,
+            JSON.stringify(e.payload),
+            e.parentEventId,
+            e.searchable,
+            e.subagentId,
+            e.provider,
+            e.providerToolCallId,
+          );
+        }
+
+        const sql = `INSERT INTO ai_transcript_events (
+            session_id, sequence, created_at, event_type, searchable_text,
+            payload, parent_event_id, searchable, subagent_id, provider, provider_tool_call_id
+          ) VALUES ${valueClauses.join(', ')}
+          RETURNING ${SELECT_COLS}`;
+
+        const { rows } = await db.query<TranscriptEventRow>(sql, params);
+        for (const r of rows) all.push(rowToEvent(r));
+      }
+      return all;
+    },
+
     async updateEventPayload(id, payload): Promise<void> {
       await ensureReady();
 
