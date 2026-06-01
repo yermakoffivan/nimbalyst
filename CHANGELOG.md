@@ -12,15 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 
 ### Changed
-- Canonical transcript events are no longer persisted; they live in an in-memory `TranscriptRuntime` cache per session and are rebuilt from raw `ai_agent_messages` on first read.
-- `ai_agent_messages` FTS5 mirror now indexes `searchable_text` (extractor output) instead of the raw `content` column, so tool noise and metadata chunks stay out of the search index.
-
+<!-- Changes to existing functionality go here -->
 
 ### Fixed
-- Fixed multi-minute beachball at startup for users with many shared trackers. The `document-sync:open` IPC now single-flights and caches the org-key-fingerprint HTTPS check per orgId (60s TTL) instead of firing one HTTPS call per opened document, and the tracker prewarm hook drops its limit from 50 to 10 and debounces 2s to avoid piling onto the restore wave.
-- Marketplace `.nimext` packages now include the `claude-plugin/` directory so installed extensions (slides, mindmap, etc.) can register their Claude skills instead of logging `Claude plugin path not found` and silently dropping the plugin.
-- `HistoryManager.getPendingFilesForSession` no longer throws `function json_extract(jsonb, unknown) does not exist` on PGLite installs. The query now picks `metadata->>'sessionId'` on PGLite and keeps `json_extract` on SQLite so the migration-2 index still matches.
-- Claude Code now drives the canonical transcript transformer incrementally during streaming. Without this, mid-turn widgets like the commit-proposal pending widget never appeared when the user was viewing a different session than the one streaming -- the canonical store only advanced on the next `aiLoadSession`, which the renderer never fired for an inactive session. The new `scheduleTranscriptProcessing` runs after each SDK chunk write and `processTranscriptMessages` runs after every `flushPendingWrites`, mirroring what OpenCodeProvider / OpenAICodexACPProvider / CopilotCLIProvider already do.
+<!-- Bug fixes go here -->
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.63.4] - 2026-06-01
+
+
+### Added
+<!-- New features go here -->
+
+### Changed
+- Canonical transcript events kept in-memory per session and rebuilt from raw messages on demand instead of persisted to disk.
+- Agent-message search index now mirrors extractor output, keeping tool noise and metadata chunks out of search results.
+
+### Fixed
+- Multi-minute startup beachball for users with many shared trackers; document-sync key-fingerprint check is now single-flighted and cached, and tracker prewarm is debounced.
+- Marketplace `.nimext` packages now ship the `claude-plugin/` directory so installed extensions can register their Claude skills.
+- Pending-files query no longer throws `json_extract` errors on PGLite installs.
+- Claude Code mid-turn widgets (commit proposal, etc.) now appear in the background-session view as the turn streams, not only after the next session load.
 
 ### Removed
 <!-- Removed features go here -->
