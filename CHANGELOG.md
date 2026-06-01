@@ -15,7 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
+<!-- Bug fixes go here -->
+
+### Removed
+<!-- Removed features go here -->
+
+## [0.63.5] - 2026-06-01
+
+
+### Added
+<!-- New features go here -->
+
+### Changed
+<!-- Changes to existing functionality go here -->
+
+### Fixed
 - Commit proposal widget no longer reverts to "pending" after a successful commit when a later duplicate response carries an error.
+- SQLite migration no longer crashes with `Invalid URL` during the adopt phase in packaged builds.
 
 ### Removed
 <!-- Removed features go here -->
