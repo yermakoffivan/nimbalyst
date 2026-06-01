@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 
 ### Changed
-<!-- Changes to existing functionality go here -->
+- Canonical transcript events are no longer persisted; they live in an in-memory `TranscriptRuntime` cache per session and are rebuilt from raw `ai_agent_messages` on first read.
+- `ai_agent_messages` FTS5 mirror now indexes `searchable_text` (extractor output) instead of the raw `content` column, so tool noise and metadata chunks stay out of the search index.
+
 
 ### Fixed
 - Fixed multi-minute beachball at startup for users with many shared trackers. The `document-sync:open` IPC now single-flights and caches the org-key-fingerprint HTTPS check per orgId (60s TTL) instead of firing one HTTPS call per opened document, and the tracker prewarm hook drops its limit from 50 to 10 and debounces 2s to avoid piling onto the restore wave.

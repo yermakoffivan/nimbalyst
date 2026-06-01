@@ -848,10 +848,14 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
 
       const contentQuery = (() => {
         const contentQueryParams: any[] = [searchTerms];
+        // Phase 2 of canonical-transcript-deprecation: search the raw
+        // ai_agent_messages.searchable_text column directly. The legacy
+        // ai_transcript_events index is being retired in Phase 4.
         let contentQuerySql = `SELECT DISTINCT t.session_id,
             MAX(ts_rank_cd(to_tsvector('english', COALESCE(t.searchable_text, '')), plainto_tsquery('english', $1))) as rank
-          FROM ai_transcript_events t
-          WHERE t.searchable = TRUE
+          FROM ai_agent_messages t
+          WHERE t.searchable_text IS NOT NULL
+            AND t.message_kind IN ('user', 'assistant', 'system')
             AND to_tsvector('english', COALESCE(t.searchable_text, '')) @@ plainto_tsquery('english', $1)`;
 
         if (cutoffDate) {
@@ -860,9 +864,9 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
         }
 
         if (direction === 'input') {
-          contentQuerySql += ` AND t.event_type = 'user_message'`;
+          contentQuerySql += ` AND t.message_kind = 'user'`;
         } else if (direction === 'output') {
-          contentQuerySql += ` AND t.event_type = 'assistant_message'`;
+          contentQuerySql += ` AND t.message_kind = 'assistant'`;
         }
 
         contentQuerySql += ' GROUP BY t.session_id';

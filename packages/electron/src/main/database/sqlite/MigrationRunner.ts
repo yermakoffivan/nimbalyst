@@ -51,6 +51,21 @@ export function getMigrations(schemaDir: string): Migration[] {
       name: 'pending_files_index',
       sqlFile: path.join(schemaDir, '0002_pending_files_index.sql'),
     },
+    {
+      version: 3,
+      name: 'searchable_text_message_kind',
+      sqlFile: path.join(schemaDir, '0003_searchable_text_message_kind.sql'),
+    },
+    {
+      version: 4,
+      name: 'fts_on_searchable_text',
+      sqlFile: path.join(schemaDir, '0004_fts_on_searchable_text.sql'),
+    },
+    {
+      version: 5,
+      name: 'drop_transcript_events',
+      sqlFile: path.join(schemaDir, '0005_drop_transcript_events.sql'),
+    },
   ];
 }
 

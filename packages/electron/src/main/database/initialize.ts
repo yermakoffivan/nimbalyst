@@ -167,33 +167,11 @@ export async function initializeDatabase(): Promise<SessionStore> {
     // from ai_transcript_events) left users with the symptom that a session
     // opens to an empty transcript until the user manually right-click ->
     // "Reprocess transcript". Resetting the metadata here puts those
-    // sessions back into the "never transformed" branch so the lazy
-    // TranscriptTransformer.ensureUpToDate path regenerates events on first
-    // open. Idempotent: NULLs only the rows that need it, no-op once healed.
-    try {
-      const repairResult = await database.query<{ id: string }>(
-        `UPDATE ai_sessions
-           SET canonical_transform_version = NULL,
-               canonical_last_raw_message_id = NULL,
-               canonical_last_transformed_at = NULL,
-               canonical_transform_status = NULL
-         WHERE canonical_transform_status = 'complete'
-           AND NOT EXISTS (
-             SELECT 1 FROM ai_transcript_events e WHERE e.session_id = ai_sessions.id
-           )
-         RETURNING id`,
-      );
-      if (repairResult.rows.length > 0) {
-        logger.main.warn(
-          `[Database] Reset canonical_transform_status on ${repairResult.rows.length} sessions whose canonical events table was empty (likely post-PGLite-migration). They will be re-transformed lazily on first open.`,
-        );
-      }
-    } catch (repairErr) {
-      // Don't block startup if the repair fails (e.g. on a backend that
-      // doesn't support the query yet). The user-facing fallback is still
-      // the per-session "Reprocess transcript" context-menu action.
-      logger.main.error('[Database] Canonical transform metadata repair failed:', repairErr);
-    }
+    // Phase 4 of canonical-transcript-deprecation: ai_transcript_events and
+    // its watermark columns are gone. The legacy self-heal that NULLed
+    // canonical_transform_* when the events table was empty is no longer
+    // needed because there is no persisted state to drift out of sync with;
+    // the in-memory runtime always rebuilds from raw on demand.
 
     // Self-heal sessions whose metadata is the artifact of `{...stringValue}`
     // somewhere upstream -- the spread treated each char of a string as a

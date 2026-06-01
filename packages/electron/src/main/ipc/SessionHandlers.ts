@@ -1486,14 +1486,18 @@ export async function registerSessionHandlers() {
     // ============================================================
 
     safeHandle('transcript:list-user-prompts', async (_event, workspacePath: string, limit: number = 2000) => {
+        // Phase 3 of canonical-transcript-deprecation: ai_transcript_events is
+        // going away. The cross-session "list all user prompts" query now reads
+        // ai_agent_messages directly, filtering on the message_kind column
+        // populated by the searchable-text extractor.
         const { database } = await import('../database/PGLiteDatabaseWorker');
         const { rows } = await database.query(`
             SELECT t.id, t.session_id, t.searchable_text, t.created_at,
                    s.title, s.provider, s.parent_session_id
-            FROM ai_transcript_events t
+            FROM ai_agent_messages t
             JOIN ai_sessions s ON t.session_id = s.id
-            WHERE t.event_type = 'user_message'
-              AND t.searchable = TRUE
+            WHERE t.message_kind = 'user'
+              AND t.searchable_text IS NOT NULL
               AND s.workspace_id = $1
             ORDER BY t.created_at DESC
             LIMIT $2
