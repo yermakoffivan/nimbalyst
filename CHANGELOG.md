@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
-<!-- Bug fixes go here -->
+- Auto-updater no longer pops a giant "Cannot find latest-mac.yml ... HttpError: 404" toast on background polls when a release is mid-publish. Treats the 404 the same as "no update available" until the workflow finishes uploading metadata; manual checks see a friendly "release is being published" message instead of the raw HttpError.
+- Release builds no longer fail on CI when the afterPack worker-bundle ABI check times out spawning the unsigned Electron binary. The path-resolution and `.node`-presence checks remain fatal (those catch the packaging-miss class); only the Electron-as-Node boot probe is now informational.
 
 ### Removed
 <!-- Removed features go here -->
