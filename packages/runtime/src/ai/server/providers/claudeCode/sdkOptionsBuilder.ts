@@ -173,7 +173,7 @@ export async function buildSdkOptions(
   const resolvedBinaryPath = await resolveClaudeAgentCliPath(enhancedPath).catch(() => undefined);
   const customPath = ClaudeCodeDeps.customClaudeCodePathLoader?.(workspacePath) || '';
   const effectivePath = customPath || resolvedBinaryPath;
-  console.log(`[CLAUDE-CODE] Binary path: custom=${customPath || '(none)'} resolved=${resolvedBinaryPath ?? '(none)'} effective=${effectivePath ?? '(none)'}`);
+  // console.log(`[CLAUDE-CODE] Binary path: custom=${customPath || '(none)'} resolved=${resolvedBinaryPath ?? '(none)'} effective=${effectivePath ?? '(none)'}`);
 
   const options: any = {
     pathToClaudeCodeExecutable: effectivePath,
