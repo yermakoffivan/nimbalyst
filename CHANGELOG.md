@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tracker label arrays no longer pick up a phantom leading `null` on the SQLite backend.
 - New Worktree button no longer stays disabled in git repos when the initial probe races mount.
 - Calc Sheets PARSE ERR rows are now legible in dark mode; error text and banner colors come from theme-aware CSS vars instead of a hardcoded dark red.
+- Usage analytics document-edit stats and time-series no longer crash on either backend; they now read the actual `document_history.timestamp` column instead of a nonexistent `created_at`.
 
 ### Removed
 <!-- Removed features go here -->
