@@ -559,24 +559,16 @@ export function initSessionStateListeners(): () => void {
     // The registry's `updatedAt` stays at the value from the last DB refresh
     // — sort order during a live turn is driven by `markSessionTurnActivityAtom`,
     // not by per-message timestamps.
-    const messageActivityTimestamp = Date.now();
-    store.set(sessionLastActivityAtom(sessionId), messageActivityTimestamp);
-    // Also bump the workstream parent (if any) so:
-    // (a) `workspaceSessionTurnActivityAtom.get(parent.id)` lifts the parent
-    //     to the top of the agent-mode sort while its child streams — turn
-    //     boundaries alone (started/waiting/completed) don't fire often
-    //     enough during a long multi-minute response;
-    // (b) the parent's own relative-time label, if it ever surfaces one,
-    //     stays in sync with the child.
-    store.set(markSessionTurnActivityAtom, {
-      sessionId,
-      workspacePath,
-      timestamp: messageActivityTimestamp,
-    });
-    bumpParentTurnActivity(sessionId, workspacePath, messageActivityTimestamp);
-    if (sessionMeta?.parentSessionId) {
-      store.set(sessionLastActivityAtom(sessionMeta.parentSessionId), messageActivityTimestamp);
-    }
+    // Per-message bumps are limited to the row's own relative-time label.
+    // Do NOT write `markSessionTurnActivityAtom` here or bump the parent's
+    // turn-activity: those drive the agent-mode sort (via
+    // `workspaceSessionTurnActivityAtom`), and per-chunk writes re-fire the
+    // SessionHistory sort cascade and the downstream `session-files:get-by-session`
+    // storm that the May 28 fix (commit 3d613ecfc) eliminated. Parent
+    // workstream rows still rise to the top via the turn-boundary bumps in
+    // the `session:started`/`waiting`/`completed` cases above; that's the
+    // intended cadence for re-sorts.
+    store.set(sessionLastActivityAtom(sessionId), Date.now());
 
     // Only mutate the registry to flip `isArchived: false` when it actually
     // is currently archived. The database layer unarchives on insert; the
