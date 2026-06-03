@@ -1201,11 +1201,14 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
               await this.toolHooksService.createTurnEndSnapshots();
             }
 
+            // Prefer result.usage (deduplicated by Anthropic via message.id). The SDK's
+            // modelUsage aggregate over-counts: the agent stream emits each assistant
+            // message 2-3x (one event per content block) and modelUsage sums the dupes,
+            // inflating cumulative input/output. Fall back to the modelUsage sum only when
+            // result.usage is missing. See NIM-689.
             let totalInputTokens = usageData?.input_tokens || 0;
             let totalOutputTokens = usageData?.output_tokens || 0;
-            if (modelUsageData) {
-              totalInputTokens = 0;
-              totalOutputTokens = 0;
+            if (!usageData && modelUsageData) {
               for (const modelName of Object.keys(modelUsageData)) {
                 const modelStats = modelUsageData[modelName];
                 totalInputTokens += modelStats.inputTokens || 0;
@@ -1404,19 +1407,26 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
           await this.toolHooksService.createTurnEndSnapshots();
         }
 
-        // Calculate total input/output tokens from modelUsage if available (more accurate than usageData)
+        // Prefer result.usage (deduplicated by Anthropic via message.id) for token totals.
+        // modelUsage over-counts because the agent stream emits each assistant message
+        // 2-3x (one event per content block) and modelUsage sums the dupes. Use the
+        // modelUsage sum only as a fallback when result.usage is absent. Cost still comes
+        // from modelUsage (the only per-model cost source; not displayed). See NIM-689.
         let totalInputTokens = usageData?.input_tokens || 0;
         let totalOutputTokens = usageData?.output_tokens || 0;
         let totalCostUSD = 0;
 
         if (modelUsageData) {
-          // Sum up tokens from all models (in case multiple models were used)
-          totalInputTokens = 0;
-          totalOutputTokens = 0;
+          if (!usageData) {
+            totalInputTokens = 0;
+            totalOutputTokens = 0;
+          }
           for (const modelName of Object.keys(modelUsageData)) {
             const modelStats = modelUsageData[modelName];
-            totalInputTokens += modelStats.inputTokens || 0;
-            totalOutputTokens += modelStats.outputTokens || 0;
+            if (!usageData) {
+              totalInputTokens += modelStats.inputTokens || 0;
+              totalOutputTokens += modelStats.outputTokens || 0;
+            }
             totalCostUSD += modelStats.costUSD || 0;
           }
         }
