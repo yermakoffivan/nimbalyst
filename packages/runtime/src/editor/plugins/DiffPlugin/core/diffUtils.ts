@@ -135,6 +135,8 @@ import {
   createState,
   $getState,
   $setState,
+  $addUpdateTag,
+  SKIP_DOM_SELECTION_TAG,
 } from 'lexical';
 import {$createAutoLinkNode, $isAutoLinkNode, $isLinkNode} from '@lexical/link';
 
@@ -1089,6 +1091,19 @@ export function applyMarkdownDiffToDocument(
     try {
       editor.update(
         () => {
+          // When the editor isn't focused (e.g. the user is typing in the AI chat
+          // box while an agent applies this diff), skip DOM-selection reconciliation
+          // so Lexical doesn't pull browser focus into the contentEditable and
+          // hijack the user's keystrokes.
+          const rootEl = editor.getRootElement();
+          if (
+            rootEl &&
+            typeof document !== 'undefined' &&
+            !rootEl.contains(document.activeElement)
+          ) {
+            $addUpdateTag(SKIP_DOM_SELECTION_TAG);
+          }
+
           // DEBUG: Log initial live tree state
           // const initialChildren = $getRoot().getChildren();
           // console.log(`\n[DIFF APPLICATION] Starting with ${initialChildren.length} children in live tree:`);

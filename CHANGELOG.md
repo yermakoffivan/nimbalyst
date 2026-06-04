@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Typing in the chat box no longer has keystrokes hijacked into an open markdown file while an agent is editing it.
 - Browser extension toolbar and URL bar now use the active theme's colors instead of rendering with a white URL box in dark mode.
 
 ### Removed
