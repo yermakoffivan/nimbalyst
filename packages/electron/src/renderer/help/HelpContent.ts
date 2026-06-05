@@ -305,6 +305,11 @@ export const HelpContent: Record<string, HelpEntry> = {
     body: 'Browse and edit documents shared with your team in real-time. Collaborate on markdown, spreadsheets, and diagrams.',
     shortcut: KeyboardShortcuts.view.collabMode,
   },
+  'pr-review-mode-button': {
+    title: 'Pull Requests',
+    body: 'Review GitHub pull requests without leaving the app: browse the list, read diffs and conversation, and approve or merge.',
+    shortcut: KeyboardShortcuts.view.prReviewMode,
+  },
 
   // ============================================================================
   // Settings

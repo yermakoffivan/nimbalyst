@@ -40,6 +40,7 @@ import { registerProjectSelectionHandlers } from './ipc/ProjectSelectionHandlers
 import { registerMultiProjectRailHandlers } from './ipc/MultiProjectRailHandlers';
 import { registerUsageAnalyticsHandlers } from './ipc/UsageAnalyticsHandlers';
 import { registerWorktreeHandlers } from './ipc/WorktreeHandlers';
+import { registerPullRequestHandlers, stopPullRequestPollScheduler } from './ipc/PullRequestHandlers';
 import { registerWakeupHandlers } from './ipc/WakeupHandlers';
 import { registerBlitzHandlers } from './ipc/BlitzHandlers';
 import { registerProjectMigrationHandlers } from './ipc/ProjectMigrationHandlers';
@@ -1395,6 +1396,7 @@ app.whenReady().then(async () => {
     registerGitStatusHandlers();
     registerGitHandlers();
     registerWorktreeHandlers();
+    registerPullRequestHandlers();
     registerWakeupHandlers();
     registerBlitzHandlers();
     registerProjectMigrationHandlers();
@@ -2573,6 +2575,13 @@ app.on('before-quit', async (event) => {
         if (memoryMonitorInterval) {
             clearInterval(memoryMonitorInterval);
             memoryMonitorInterval = null;
+        }
+
+        // Stop the PR review polling scheduler (issue #307, Phase D).
+        try {
+            stopPullRequestPollScheduler();
+        } catch (e) {
+            console.error('[QUIT] Failed to stop PR poll scheduler:', e);
         }
 
         // CRITICAL: Stop performance monitoring - this has an interval that keeps the process alive!

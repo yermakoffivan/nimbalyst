@@ -15,6 +15,7 @@ import {
   activeWorkspacePathAtom,
   closeOpenProjectAtom,
 } from '../store/atoms/openProjects';
+import { prRemoteAtom } from '../store/atoms/pullRequests';
 import posthog from 'posthog-js';
 
 interface KeyboardShortcutsOptions {
@@ -140,6 +141,16 @@ export function useKeyboardShortcuts({
         e.preventDefault();
         e.stopPropagation();
         setActiveMode('collab');
+      }
+      // Cmd+U to switch to PR Review mode (only when the active workspace has a
+      // GitHub remote, mirroring the gutter button's visibility).
+      if (workspaceMode && isAppModifier && !e.shiftKey && !e.altKey && e.key === 'u') {
+        const prRemote = store.get(prRemoteAtom);
+        if (prRemote && prRemote.workspacePath === store.get(activeWorkspacePathAtom)) {
+          e.preventDefault();
+          e.stopPropagation();
+          setActiveMode('pr-review');
+        }
       }
       // Ctrl+` for Terminal panel (Ctrl on all platforms, matching VS Code)
       if (workspaceMode && e.code === 'Backquote' && !e.shiftKey && !e.altKey &&

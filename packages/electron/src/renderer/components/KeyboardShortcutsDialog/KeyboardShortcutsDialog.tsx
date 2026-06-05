@@ -157,6 +157,7 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
         { label: 'Toggle Terminal Panel', shortcut: KeyboardShortcuts.view.toggleTerminalPanel }, // shared/KeyboardShortcuts.ts:48 - Ctrl+`
         { label: 'Tracker Mode', shortcut: KeyboardShortcuts.view.trackerMode }, // shared/KeyboardShortcuts.ts:49 - Cmd+T
         { label: 'Shared Documents', shortcut: KeyboardShortcuts.view.collabMode }, // shared/KeyboardShortcuts.ts:50 - Cmd+D
+        { label: 'Pull Requests', shortcut: KeyboardShortcuts.view.prReviewMode }, // shared/KeyboardShortcuts.ts:52 - Cmd+U
         { label: 'Toggle Sidebar', shortcut: KeyboardShortcuts.view.toggleSidebar }, // shared/KeyboardShortcuts.ts:51 - Cmd+B
         { label: 'Navigate Back', shortcut: KeyboardShortcuts.view.navigateBack }, // shared/KeyboardShortcuts.ts:52 - Cmd+[
         { label: 'Navigate Forward', shortcut: KeyboardShortcuts.view.navigateForward }, // shared/KeyboardShortcuts.ts:53 - Cmd+]
