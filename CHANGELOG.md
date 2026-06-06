@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Typing in the chat box no longer has keystrokes hijacked into an open markdown file while an agent is editing it.
 - Restored diff application in headless mode (tests and server-side diffing), which had started throwing on `getRootElement` after the chat-box focus fix.
 - Browser extension toolbar and URL bar now use the active theme's colors instead of rendering with a white URL box in dark mode.
+- Multi-Project: manually running an automation now creates its session in the active rail project instead of always landing in the startup project. (#544)
 
 ### Removed
 <!-- Removed features go here -->

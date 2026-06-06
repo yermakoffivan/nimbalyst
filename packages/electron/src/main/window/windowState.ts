@@ -17,6 +17,23 @@ export function resolveActiveWorkspacePath(state: WindowState | undefined): stri
 }
 
 /**
+ * Resolve the visible workspace path for a window id, honoring the project
+ * rail's active selection. Returns the active rail project when set, falling
+ * back to the window's primary/startup path, or `undefined` when the window
+ * id is unknown.
+ *
+ * Use this (not a raw `windowStates.get(id)?.workspacePath` read) anywhere a
+ * main-process handler must act on "the project the user is currently looking
+ * at" — e.g. creating an AI session for an extension prompt. Reading the raw
+ * primary path silently routes the action to the startup project in
+ * Multi-Project mode (issue #544).
+ */
+export function resolveActiveWorkspacePathForWindowId(windowId: number | null | undefined): string | undefined {
+    if (windowId === null || windowId === undefined) return undefined;
+    return resolveActiveWorkspacePath(windowStates.get(windowId)) ?? undefined;
+}
+
+/**
  * Whether a window has any interest in a workspace path — either as its
  * primary path or as a warm "additional" path in the project rail. Used
  * by service-cleanup logic so destroying a window only frees a workspace's

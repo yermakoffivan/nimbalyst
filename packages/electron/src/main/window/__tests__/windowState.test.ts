@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   windowStates,
   resolveActiveWorkspacePath,
+  resolveActiveWorkspacePathForWindowId,
   windowReferencesWorkspace,
   anyWindowReferencesWorkspace,
 } from '../windowState';
@@ -42,6 +43,34 @@ describe('windowState helpers', () => {
 
     it('returns null when both are nullish', () => {
       expect(resolveActiveWorkspacePath(makeState())).toBeNull();
+    });
+  });
+
+  describe('resolveActiveWorkspacePathForWindowId', () => {
+    it('returns undefined for a null or undefined window id', () => {
+      expect(resolveActiveWorkspacePathForWindowId(null)).toBeUndefined();
+      expect(resolveActiveWorkspacePathForWindowId(undefined)).toBeUndefined();
+    });
+
+    it('returns undefined when no window state is registered for the id', () => {
+      expect(resolveActiveWorkspacePathForWindowId(42)).toBeUndefined();
+    });
+
+    it('falls back to the primary workspacePath when no rail project is active', () => {
+      windowStates.set(1, makeState({ workspacePath: '/ws/project1' }));
+      expect(resolveActiveWorkspacePathForWindowId(1)).toBe('/ws/project1');
+    });
+
+    // Regression for issue #544: in Multi-Project mode the rail switches the
+    // active project via activeWorkspacePath while workspacePath stays pinned
+    // to the startup project. Resolution must honor the active project so an
+    // automation/extension prompt creates its session in the visible project.
+    it('returns the active rail project, not the startup primary (issue #544)', () => {
+      windowStates.set(1, makeState({
+        workspacePath: '/ws/project1',
+        activeWorkspacePath: '/ws/project3',
+      }));
+      expect(resolveActiveWorkspacePathForWindowId(1)).toBe('/ws/project3');
     });
   });
 
