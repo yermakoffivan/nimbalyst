@@ -21,6 +21,10 @@ describe('buildClaudeCliModelSwitchCommand', () => {
     expect(buildClaudeCliModelSwitchCommand('claude-code-cli:fable')).toBe('/model fable');
   });
 
+  it('maps fable-1m to the CLI 1M form', () => {
+    expect(buildClaudeCliModelSwitchCommand('claude-code-cli:fable-1m')).toBe('/model fable[1m]');
+  });
+
   it('maps opus-1m to the CLI 1M alias', () => {
     expect(buildClaudeCliModelSwitchCommand('claude-code-cli:opus-1m')).toBe('/model opus[1m]');
   });

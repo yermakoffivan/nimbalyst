@@ -344,10 +344,15 @@ describe('resolveClaudeCliModelArg', () => {
     expect(resolveClaudeCliModelArg('claude-code-cli:opus-4-6')).toBe('opus');
   });
 
-  it('passes the fable variant through as the CLI `fable` alias (no 1M form exists)', () => {
+  it('passes the fable variant through as the CLI `fable` alias', () => {
     expect(resolveClaudeCliModelArg('claude-code-cli:fable')).toBe('fable');
     expect(resolveClaudeCliModelArg('claude-code-cli:fable-5')).toBe('fable');
     expect(resolveClaudeCliModelArg('fable')).toBe('fable');
+  });
+
+  it('translates fable-1m to the CLI `fable[1m]` form — plain fable is windowed at 200k', () => {
+    expect(resolveClaudeCliModelArg('claude-code-cli:fable-1m')).toBe('fable[1m]');
+    expect(resolveClaudeCliModelArg('fable-1m')).toBe('fable[1m]');
   });
 
   it('passes a bare variant through (normalized), translating -1m to [1m]', () => {

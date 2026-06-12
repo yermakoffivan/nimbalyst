@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
-- Claude Fable 5 is now selectable across all Claude providers.
+- Claude Fable 5 is now selectable across all Claude providers, including a Fable 5 (1M) variant; existing Fable defaults migrate to 1M automatically.
 - Switch models mid-session on Claude Code CLI sessions from the model picker.
 - Claude Code CLI sessions receive your active document and selection as context, support workspace slash commands and the memory widget, and auto-name themselves from the first prompt.
 - Toggle the raw-terminal drawer with Ctrl+Shift+`; hover help on the model picker explains the Claude Agent vs Claude Code CLI choice.
@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the whole app freezing permanently after closing a terminal that had rendered emoji output.
 - Terminal Retry now actually recovers a failed initialization, and a slow-starting backend auto-recovers without clicking Retry.
 - Claude Code CLI raw terminal no longer double-paints or mis-wraps its display after restoring a session.
+- Fable 5 sessions no longer hit a false 200k context ceiling: selecting Fable resolves to a model the Claude Agent SDK accepts, and the context indicator matches the CLI's real window.
+- Claude Code CLI sessions no longer appear disconnected after switching sessions — the terminal reattaches even while its drawer is collapsed.
 
 ### Removed
 <!-- Removed features go here -->

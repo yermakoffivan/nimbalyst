@@ -12,6 +12,7 @@ import { themeIdAtom } from '@nimbalyst/runtime/store';
 import { TerminalContextMenu } from './TerminalContextMenu';
 import { sanitizeScrollback, stripProblematicEscapeSequences, cleanScrollback } from './scrollbackSanitization';
 import { loadTerminalGhostty } from './ghosttyInstance';
+import { isElementMeasurable, waitUntilElementMeasurable } from './terminalVisibility';
 
 // Type for terminal API is defined in electron.d.ts
 
@@ -49,23 +50,6 @@ export interface TerminalPanelProps {
    * explicitly for native pickers.
    */
   autoFocus?: boolean;
-}
-
-async function waitForVisibleTerminalDimensions(
-  element: HTMLElement,
-  timeoutMs = 1500
-): Promise<void> {
-  const start = Date.now();
-
-  while (Date.now() - start < timeoutMs) {
-    const rect = element.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      return;
-    }
-    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
-  }
-
-  throw new Error('Terminal container never became measurable');
 }
 
 function getVisibleScreenLines(terminal: Terminal): string[] {
@@ -336,9 +320,83 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         if (disposed) return;
 
         if (!terminalRef.current) return;
-        await waitForVisibleTerminalDimensions(terminalRef.current);
 
-        if (disposed) return;
+        /**
+         * Race the backend init against a timeout, mirroring the NIM-817
+         * late-recovery semantics: a late FAILURE replaces the generic message
+         * with the real error; a late SUCCESS auto-retries the full init once.
+         * Returns false when the caller must bail (error already surfaced, or
+         * disposed mid-race).
+         */
+        const INIT_TIMEOUT_MS = 10000;
+        const initBackendWithTimeout = async (
+          dims?: { cols?: number; rows?: number }
+        ): Promise<boolean> => {
+          const initPromise = initBackend(dims);
+          const timedOutSentinel = { success: false as const, error: `Terminal initialization timed out after ${INIT_TIMEOUT_MS / 1000} seconds` };
+          const timeoutPromise = new Promise<typeof timedOutSentinel>((resolve) => {
+            setTimeout(() => resolve(timedOutSentinel), INIT_TIMEOUT_MS);
+          });
+
+          const result = await Promise.race([initPromise, timeoutPromise]);
+
+          if (disposed) return false;
+
+          if (result === timedOutSentinel) {
+            // NIM-817: the backend is still working (slow claude spawn /
+            // MCP-config build / proxy startup). Show the timeout, but keep
+            // listening: a late FAILURE replaces the generic message with the
+            // real error; a late SUCCESS auto-retries the full init once so the
+            // user doesn't have to click Retry at all.
+            initPromise.then((late) => {
+              if (disposedRef.current) return;
+              if (late.success || ('alreadyActive' in late && late.alreadyActive)) {
+                if (!lateInitRecoveredRef.current) {
+                  lateInitRecoveredRef.current = true;
+                  console.warn('[TerminalPanel] Backend came up after the init timeout; re-initializing');
+                  handleRestart();
+                }
+              } else {
+                setInitError(late.error || 'Failed to initialize PTY');
+              }
+            }).catch((err) => {
+              if (!disposedRef.current) {
+                setInitError(err instanceof Error ? err.message : String(err));
+              }
+            });
+            console.error('[TerminalPanel] Failed to initialize PTY:', timedOutSentinel.error);
+            setInitError(timedOutSentinel.error);
+            return false;
+          }
+
+          if (!result.success && !('alreadyActive' in result && result.alreadyActive)) {
+            const errorMessage = result.error || 'Failed to initialize PTY';
+            console.error('[TerminalPanel] Failed to initialize PTY:', errorMessage);
+            setInitError(errorMessage);
+            return false;
+          }
+
+          return true;
+        };
+
+        // NIM-826: a (re)mount while the container is hidden — the CLI drawer
+        // body is display:none when collapsed, and NIM-820 made a user
+        // collapse sticky across remounts — used to throw "Terminal container
+        // never became measurable" after 1.5s, stranding the strip in a dead
+        // error state even though the PTY in main was still alive (the visible
+        // "CLI session disconnected when I switched sessions" failure). The
+        // backend doesn't need pixel dimensions, so bring it up immediately
+        // (spawn/queue-flush proceed while hidden) and wait WITHOUT a deadline
+        // for the container before building the visual terminal.
+        let backendReady = false;
+        if (!isElementMeasurable(terminalRef.current)) {
+          if (!(await initBackendWithTimeout(undefined))) return;
+          backendReady = true;
+          const visibility = await waitUntilElementMeasurable(terminalRef.current, {
+            isDisposed: () => disposed,
+          });
+          if (visibility !== 'measurable' || disposed) return;
+        }
 
         // Create Ghostty Terminal instance
         terminal = new Terminal({
@@ -368,55 +426,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             console.warn('[TerminalPanel] Initial fit failed:', e);
           }
 
-          // Initialize the backend (shell or claude CLI) after we know real dimensions.
-          const initPromise = initBackend({
-            cols: initialDims?.cols,
-            rows: initialDims?.rows,
-          });
-
-          const INIT_TIMEOUT_MS = 10000;
-          const timedOutSentinel = { success: false as const, error: `Terminal initialization timed out after ${INIT_TIMEOUT_MS / 1000} seconds` };
-          const timeoutPromise = new Promise<typeof timedOutSentinel>((resolve) => {
-            setTimeout(() => resolve(timedOutSentinel), INIT_TIMEOUT_MS);
-          });
-
-          const result = await Promise.race([initPromise, timeoutPromise]);
+          // Initialize the backend (shell or claude CLI) after we know real
+          // dimensions — unless the hidden-mount path already brought it up,
+          // in which case the resize below corrects the spawn-default size.
+          if (!backendReady) {
+            if (!(await initBackendWithTimeout({
+              cols: initialDims?.cols,
+              rows: initialDims?.rows,
+            }))) {
+              return;
+            }
+          }
 
           if (disposed) return;
-
-          if (result === timedOutSentinel) {
-            // NIM-817: the backend is still working (slow claude spawn /
-            // MCP-config build / proxy startup). Show the timeout, but keep
-            // listening: a late FAILURE replaces the generic message with the
-            // real error; a late SUCCESS auto-retries the full init once so the
-            // user doesn't have to click Retry at all.
-            initPromise.then((late) => {
-              if (disposedRef.current) return;
-              if (late.success || ('alreadyActive' in late && late.alreadyActive)) {
-                if (!lateInitRecoveredRef.current) {
-                  lateInitRecoveredRef.current = true;
-                  console.warn('[TerminalPanel] Backend came up after the init timeout; re-initializing');
-                  handleRestart();
-                }
-              } else {
-                setInitError(late.error || 'Failed to initialize PTY');
-              }
-            }).catch((err) => {
-              if (!disposedRef.current) {
-                setInitError(err instanceof Error ? err.message : String(err));
-              }
-            });
-            console.error('[TerminalPanel] Failed to initialize PTY:', timedOutSentinel.error);
-            setInitError(timedOutSentinel.error);
-            return;
-          }
-
-          if (!result.success && !('alreadyActive' in result && result.alreadyActive)) {
-            const errorMessage = result.error || 'Failed to initialize PTY';
-            console.error('[TerminalPanel] Failed to initialize PTY:', errorMessage);
-            setInitError(errorMessage);
-            return;
-          }
 
           if (initialDims) {
             window.electronAPI.terminal.resize(sessionId, initialDims.cols, initialDims.rows);

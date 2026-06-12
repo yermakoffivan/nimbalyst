@@ -201,9 +201,12 @@ export function shouldBlockStartedSessionProviderSwitch(
  * generations. See CLAUDE_CODE_PINNED_SDK_MODELS in modelConstants.ts.
  *
  * `fable` is the Fable 5 tier above Opus — the CLI accepts it as a first-class
- * alias (`--model fable`, `/model fable`). No 1M picker row: the CLI's 1M gates
- * only recognize opus/sonnet `[1m]` forms. Note it requires usage credits on
- * subscription plans (the CLI surfaces that itself when unavailable).
+ * alias (`--model fable`, `/model fable`). The CLI gates the 1M window behind
+ * the `fable[1m]` form just like opus/sonnet (plain `fable` is windowed at
+ * 200k client-side; verified on CLI 2.1.175), so `fable` IS in
+ * CLAUDE_CODE_VARIANTS_WITH_1M and gets a `fable-1m` picker row. Note it
+ * requires usage credits on subscription plans (the CLI surfaces that itself
+ * when unavailable).
  */
 export const CLAUDE_CODE_VARIANTS = ['fable', 'opus', 'opus-4-7', 'opus-4-6', 'sonnet', 'haiku'] as const;
 

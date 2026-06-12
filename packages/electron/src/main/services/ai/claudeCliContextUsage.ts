@@ -25,7 +25,14 @@ import type { AssembledUsage } from './claudeCliObservation/claudeApiMessageAsse
 
 type TokenUsage = NonNullable<SessionData['tokenUsage']>;
 
-/** 1M extended-context CLI variants are suffixed `-1m`; everything else is 200k. */
+/**
+ * 1M extended-context CLI variants are suffixed `-1m`; everything else is 200k.
+ * This applies to Fable 5 too: although the Anthropic API serves Fable at 1M
+ * natively, Claude Code windows plain `fable` at 200k client-side and gates
+ * the 1M window behind the `fable[1m]` model value (verified on CLI 2.1.175 —
+ * plain-fable sessions auto-compact at ~177k). Our `fable-1m` picker variant
+ * maps to `fable[1m]`, so the generic `-1m` rule covers it.
+ */
 const CLI_DEFAULT_CONTEXT_WINDOW = 200_000;
 const CLI_1M_CONTEXT_WINDOW = 1_000_000;
 

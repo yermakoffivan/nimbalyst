@@ -269,12 +269,28 @@ export const CLAUDE_CODE_MODEL_LABELS: Record<ClaudeCodeVariant, string> = {
  * string (or missing entry) means "pass the variant name straight through".
  */
 export const CLAUDE_CODE_PINNED_SDK_MODELS: Partial<Record<ClaudeCodeVariant, string>> = {
+  // The Agent SDK's bundled CLI rejects the bare `fable` alias ("There's an
+  // issue with the selected model (fable)…", 2026-06-12) — version skew with
+  // the user's interactive CLI, which does accept it. Pin the full model id;
+  // the interactive-CLI path (`resolveClaudeCliModelArg`) does not read this
+  // map and keeps sending the working `fable` alias to the PTY.
+  fable: 'claude-fable-5',
   'opus-4-7': 'claude-opus-4-7',
   'opus-4-6': 'claude-opus-4-6',
 };
 
-/** Variants that support a 1M-context extended picker row. */
+/**
+ * Variants that support a 1M-context extended picker row.
+ *
+ * `fable` belongs here even though the Anthropic API serves Fable 5 at 1M
+ * natively: Claude Code gates the 1M window behind the `[1m]` model-value
+ * suffix for Fable too (verified against CLI 2.1.175 — plain `fable` sessions
+ * auto-compact at ~177k/200k, and the binary carries a distinct `fable[1m]`
+ * model value that a live probe accepted). Without this row there was no way
+ * to run a 1M Fable session from Nimbalyst at all.
+ */
 export const CLAUDE_CODE_VARIANTS_WITH_1M: readonly ClaudeCodeVariant[] = [
+  'fable',
   'opus',
   'sonnet',
   'opus-4-7',
