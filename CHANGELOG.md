@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Fixed the whole app freezing permanently after closing a terminal that had rendered emoji output.
+- Terminal Retry now actually recovers a failed initialization, and a slow-starting backend auto-recovers without clicking Retry.
+- Claude Code CLI raw terminal no longer double-paints or mis-wraps its display after restoring a session.
 
 ### Removed
 <!-- Removed features go here -->
