@@ -981,19 +981,40 @@ export function initSessionStateListeners(): () => void {
   activeWorkspacePathSnapshot = store.get(sessionListWorkspaceAtom) || null;
   reconcileSessionStateSubscription();
 
-  // Fetch currently active sessions and restore their processing state
-  // This handles the case where the renderer refreshes while sessions are running
-  window.electronAPI.sessionState.getActiveSessionIds?.()
-    .then((result: { success: boolean; sessionIds: string[] }) => {
-      if (result.success && result.sessionIds.length > 0) {
-        for (const sessionId of result.sessionIds) {
+  // Restore the processing spinner after a renderer refresh — but ONLY for
+  // sessions whose turn is actually in progress. We must use getRunningSessionIds
+  // (status running / streaming), NOT getTrackedSessionIds: the latter returns
+  // bare activeSessions map membership, which retains idle claude-code-cli
+  // sessions between turns (the long-lived CLI process keeps the session in the
+  // map). Trusting membership pinned the "Processing…" spinner on idle background
+  // CLI sessions forever (NIM-846). We also reconcile: clear the processing atom
+  // for any known session that is NOT running, so a single dropped terminal
+  // lifecycle event (or a stale spinner from before this fix) can't stay stuck.
+  //
+  // If the preload is older than this renderer (getRunningSessionIds missing),
+  // skip restore entirely rather than fall back to the buggy membership list —
+  // a genuinely-running session's spinner is re-established by its next
+  // streaming event, so skipping is harmless.
+  if (window.electronAPI.sessionState.getRunningSessionIds) {
+    window.electronAPI.sessionState.getRunningSessionIds()
+      .then((result: { success: boolean; sessionIds: string[] }) => {
+        if (!result.success) return;
+        const running = new Set(result.sessionIds);
+        for (const sessionId of running) {
           store.set(sessionProcessingAtom(sessionId), true);
         }
-      }
-    })
-    .catch((error: any) => {
-      console.error('[sessionStateListeners] Error fetching active sessions:', error);
-    });
+        // Heal strays: clear processing for any registry session that isn't
+        // actually running.
+        for (const sessionId of store.get(sessionRegistryAtom).keys()) {
+          if (!running.has(sessionId) && store.get(sessionProcessingAtom(sessionId))) {
+            store.set(sessionProcessingAtom(sessionId), false);
+          }
+        }
+      })
+      .catch((error: any) => {
+        console.error('[sessionStateListeners] Error fetching running sessions:', error);
+      });
+  }
 
   // Then, listen for state change events
   window.electronAPI.sessionState.onStateChange(handleStateChange);

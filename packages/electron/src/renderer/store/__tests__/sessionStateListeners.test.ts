@@ -67,7 +67,8 @@ function makeApi() {
     sessionState: {
       subscribe: vi.fn().mockResolvedValue({ success: true }),
       unsubscribe: vi.fn().mockResolvedValue({ success: true }),
-      getActiveSessionIds: vi.fn().mockResolvedValue({ success: true, sessionIds: [] }),
+      getTrackedSessionIds: vi.fn().mockResolvedValue({ success: true, sessionIds: [] }),
+      getRunningSessionIds: vi.fn().mockResolvedValue({ success: true, sessionIds: [] }),
       // The listener uses sessionState.onStateChange as the dedicated channel
       // for lifecycle events (session:started/streaming/waiting/completed/error/interrupted).
       // Capture the handler under the same key the rest of the test code uses.
