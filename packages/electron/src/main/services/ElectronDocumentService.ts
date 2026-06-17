@@ -32,6 +32,7 @@ import {
   buildFullDocumentTrackerId,
   parseFullDocumentTrackerId,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/documentHeader/frontmatterUtils';
+import { globalRegistry } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel';
 import { database } from '../database/PGLiteDatabaseWorker';
 import { shouldExcludeDir } from '../utils/fileFilters';
 import { getRegisteredExtensions } from '../extensions/RegisteredFileTypes';
@@ -1016,7 +1017,6 @@ export class ElectronDocumentService implements DocumentService {
   private async listFullDocumentTrackerItemsFromMetadata(): Promise<TrackerItem[]> {
     this.startScanIfNeeded();
 
-    const { globalRegistry } = await import('@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel');
     const items: TrackerItem[] = [];
 
     for (const metadata of this.metadataCache.values()) {
@@ -2123,7 +2123,6 @@ export class ElectronDocumentService implements DocumentService {
     syncMode?: string;
   }): Promise<TrackerItem> {
     // Check if this type allows creation
-    const { globalRegistry } = await import('@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel');
     const model = globalRegistry.get(payload.type);
     if (model && model.creatable === false) {
       throw new Error(`Cannot create items of type '${payload.type}': type is not creatable`);
@@ -3290,7 +3289,6 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
     if (Date.now() - last < RELATIONSHIP_INDEX_TTL_MS) return;
     relationshipIndexBuiltAt.set(workspace, Date.now()); // set before await to dedupe concurrent builds
     try {
-      const { globalRegistry } = await import('@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel');
       await rebuildWorkspaceRelationshipIndex(
         workspace,
         (type) => globalRegistry.get(type)?.fields ?? [],
@@ -3331,7 +3329,6 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
       if (row.rows.length === 0) return { success: false, error: 'Item not found' };
       const r = row.rows[0];
       const data = typeof r.data === 'string' ? JSON.parse(r.data) : (r.data || {});
-      const { globalRegistry } = await import('@nimbalyst/runtime/plugins/TrackerPlugin/models/TrackerDataModel');
       const defs = globalRegistry.get(r.type)?.fields ?? [];
       const updatedAt = typeof r.updated === 'string' ? r.updated : (r.updated ? new Date(r.updated).toISOString() : null);
       await reindexItemRelationships(r.workspace, r.id, data, defs, updatedAt, database as any);

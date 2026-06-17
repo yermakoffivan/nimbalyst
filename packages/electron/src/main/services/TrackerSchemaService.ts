@@ -36,6 +36,7 @@ import {
   type SchemaDriftEntry,
   type RemoteTrackerSchemaDef,
   type ApplyRemoteSchemaResult,
+  type TypeDefDb,
 } from './tracker/trackerTypeDefStore';
 
 // ---------------------------------------------------------------------------
@@ -131,12 +132,87 @@ function loadWorkspaceSchemas(workspacePath: string): void {
   // YAML-sourced type whose file was deleted on disk so the mirror stays an
   // accurate reflection of the YAML set. Best-effort; never blocks schema
   // loading. YAML stays the init/import format for git-backed projects.
-  if (shouldReconcileYamlMirror) {
-    void (async () => {
-      if (loaded.length) await materializeTrackerTypeDefs(workspacePath, loaded);
-      await reconcileYamlTrackerTypeDefs(workspacePath, loaded.map(m => m.type));
-    })();
+  void (async () => {
+    try {
+      if (shouldReconcileYamlMirror) {
+        if (loaded.length) await materializeTrackerTypeDefs(workspacePath, loaded);
+        await reconcileYamlTrackerTypeDefs(workspacePath, loaded.map(m => m.type));
+      }
+      // Register DB-materialized types that have no local YAML (synced or
+      // CLI-created) so a tracker type shared via schema sync survives restart.
+      // loadWorkspaceSchemas only reads YAML, so without this the type vanishes
+      // from the registry after restart (the incremental schema delta never
+      // re-arrives). See NIM-865. Guard against a workspace switch that lands
+      // while the DB reads above are in flight: only mutate the shared registry
+      // if this workspace is still the active one.
+      await registerMaterializedSyncedTypes(
+        workspacePath,
+        undefined,
+        () => currentWorkspacePath === workspacePath,
+      );
+    } catch (err) {
+      console.error('[TrackerSchemaService] post-load schema mirror/register failed:', err);
+    }
+  })();
+}
+
+/**
+ * Register active DB-materialized tracker types whose authoritative definition
+ * is the DB mirror (source='sync' or 'cli'), so a tracker type shared via schema
+ * sync or created by the CLI survives restart. loadWorkspaceSchemas only reads
+ * YAML, so without this the type vanishes from the registry after restart (the
+ * incremental schema delta never re-arrives). See NIM-865.
+ *
+ * YAML-sourced rows are skipped: the on-disk YAML was already registered from
+ * source by loadWorkspaceSchemas and is authoritative; overwriting it with the
+ * (possibly drifted) mirror copy would be wrong.
+ *
+ * sync/cli rows ARE registered even when the type slot is already occupied — a
+ * built-in always sits in the registry (`has()` is true), and a synced override
+ * of a built-in (or a synced type that once collided with local YAML) must win
+ * to match the live applyRemoteWorkspaceTrackerSchemaDef path, which always
+ * `register()`s. The earlier `has()`-skip reverted synced overrides to the
+ * built-in/YAML definition on every restart.
+ *
+ * The model column is stored as JSON TEXT; PGLite may hand it back as an object
+ * and SQLite as a string, so parse defensively. See NIM-865 and DATABASE.md.
+ *
+ * `isStillActiveWorkspace`, when supplied, is re-checked AFTER the awaited DB
+ * read and before any registry mutation: a workspace switch during that read
+ * must not leak this workspace's types into the now-active workspace's registry.
+ */
+export async function registerMaterializedSyncedTypes(
+  workspacePath: string,
+  dbOverride?: TypeDefDb,
+  isStillActiveWorkspace?: () => boolean,
+): Promise<number> {
+  const defs = await listMaterializedTrackerTypeDefs(workspacePath, dbOverride);
+  // The DB read awaited above; bail before touching the shared registry if the
+  // active workspace changed out from under us. DB writes are workspace-keyed
+  // and safe to complete; only the in-memory registry can leak across projects.
+  if (isStillActiveWorkspace && !isStillActiveWorkspace()) return 0;
+  let registered = 0;
+  for (const def of defs) {
+    if (!def?.type) continue;
+    // The on-disk YAML is authoritative for yaml-sourced types and is already
+    // registered; never clobber it with the mirror copy.
+    if (def.source === 'yaml') continue;
+    let model: TrackerDataModel | null = null;
+    try {
+      // `model` is JSON TEXT on SQLite but may be a parsed object on PGLite;
+      // parseSyncedTrackerSchemaModel wants a JSON string, so normalize.
+      const raw: unknown = def.model;
+      const modelJson = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      model = parseSyncedTrackerSchemaModel(def.type, modelJson) ?? null;
+    } catch {
+      model = null;
+    }
+    if (!model) continue;
+    globalRegistry.register(model);
+    registered++;
   }
+  if (registered > 0) notifySchemaChanged();
+  return registered;
 }
 
 function reloadWorkspaceSchema(filePath: string): void {

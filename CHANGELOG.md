@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The tracker detail panel no longer overwrites custom field edits made elsewhere while it's open.
 - Personal and settings sync no longer gets stuck when a stale stored account id blocked the personal sync connection.
 - Tracker table columns for custom fields (such as PR links, author, and number in the GitHub PRs tracker) no longer render blank.
+- Tracker types shared via team sync now persist across restarts (including synced overrides of built-in types), and synced tracker items no longer silently fail to save on some databases.
 
 ### Removed
 <!-- Removed features go here -->
