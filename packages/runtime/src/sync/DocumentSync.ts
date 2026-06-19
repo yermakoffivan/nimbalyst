@@ -415,6 +415,39 @@ export class DocumentSyncProvider {
     this.send({ type: 'docSetMetadata', entries });
   }
 
+  /** Epic H2: true when the server holds the team DEK (no client crypto). */
+  private get serverManaged(): boolean {
+    return this.config.keyCustody === 'server-managed';
+  }
+
+  /**
+   * Encrypt bytes for the wire. Legacy: AES-256-GCM with the document key.
+   * Server-managed: pass-through (base64 raw bytes, empty-string iv sentinel) —
+   * the server encrypts at rest with the team DEK.
+   */
+  private async encryptForWire(data: Uint8Array): Promise<{ encrypted: string; iv: string }> {
+    if (this.serverManaged) {
+      return { encrypted: uint8ArrayToBase64(data), iv: '' };
+    }
+    return encryptBinary(data, this.config.documentKey!);
+  }
+
+  /**
+   * Decrypt bytes from the wire. Server-managed payloads are plaintext (the
+   * server decrypted them), so this just base64-decodes.
+   */
+  private async decryptFromWire(encrypted: string, iv: string): Promise<Uint8Array> {
+    if (this.serverManaged) {
+      return base64ToUint8Array(encrypted);
+    }
+    return decryptBinary(encrypted, iv, this.config.documentKey!);
+  }
+
+  /** Org key fingerprint to attach to a write; null/undefined in server-managed. */
+  private get wireOrgKeyFingerprint(): string | undefined {
+    return this.serverManaged ? undefined : this.config.orgKeyFingerprint;
+  }
+
   /**
    * Send encrypted awareness state to other connected clients.
    * Sends immediately (no throttling). Use setLocalAwareness() for throttled updates.
@@ -423,7 +456,7 @@ export class DocumentSyncProvider {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     const jsonBytes = new TextEncoder().encode(JSON.stringify(state));
-    const { encrypted, iv } = await encryptBinary(jsonBytes, this.config.documentKey);
+    const { encrypted, iv } = await this.encryptForWire(jsonBytes);
 
     this.send({
       type: 'docAwareness',
@@ -655,6 +688,12 @@ export class DocumentSyncProvider {
             senderUserId: msg.senderUserId,
           });
           break;
+        case 'docRoomMoved':
+          // Epic H3 P1: the room was relocated to another org. Stop (the old
+          // room is frozen) and let the host re-resolve + reconnect.
+          this.disconnect();
+          this.config.onRoomMoved?.({ destOrgId: msg.destOrgId });
+          break;
         case 'error':
           console.error('[DocumentSync] Server error:', msg.code, msg.message);
           break;
@@ -683,10 +722,9 @@ export class DocumentSyncProvider {
     // authoritative update up to the server.
     if (msg.snapshot) {
       try {
-        const stateBytes = await decryptBinary(
+        const stateBytes = await this.decryptFromWire(
           msg.snapshot.encryptedState,
           msg.snapshot.iv,
-          this.config.documentKey
         );
         Y.applyUpdate(this.ydoc, stateBytes, SNAPSHOT_ORIGIN);
       } catch (err) {
@@ -703,10 +741,9 @@ export class DocumentSyncProvider {
     // Apply incremental updates, per-update tolerant of decryption failures.
     for (const update of msg.updates) {
       try {
-        const updateBytes = await decryptBinary(
+        const updateBytes = await this.decryptFromWire(
           update.encryptedUpdate,
           update.iv,
-          this.config.documentKey
         );
         Y.applyUpdate(this.ydoc, updateBytes, REMOTE_ORIGIN);
       } catch (err) {
@@ -768,10 +805,9 @@ export class DocumentSyncProvider {
 
     let updateBytes: Uint8Array;
     try {
-      updateBytes = await decryptBinary(
+      updateBytes = await this.decryptFromWire(
         msg.encryptedUpdate,
         msg.iv,
-        this.config.documentKey
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === 'OperationError') {
@@ -805,10 +841,9 @@ export class DocumentSyncProvider {
     if (msg.fromUserId === this.config.userId) return;
 
     try {
-      const stateBytes = await decryptBinary(
+      const stateBytes = await this.decryptFromWire(
         msg.encryptedState,
         msg.iv,
-        this.config.documentKey
       );
       const state: AwarenessState = JSON.parse(
         new TextDecoder().decode(stateBytes)
@@ -936,10 +971,7 @@ export class DocumentSyncProvider {
       this.inflightPendingUpdate = pendingUpdate;
       this.queuedPendingUpdate = null;
       this.surfaceReplayStatus = this.status !== 'connected';
-      const { encrypted, iv } = await encryptBinary(
-        pendingUpdate,
-        this.config.documentKey
-      );
+      const { encrypted, iv } = await this.encryptForWire(pendingUpdate);
       this.replayingClientUpdateId = clientUpdateId;
       if (this.surfaceReplayStatus) {
         this.setStatus('replaying');
@@ -959,7 +991,7 @@ export class DocumentSyncProvider {
         encryptedUpdate: encrypted,
         iv,
         clientUpdateId,
-        orgKeyFingerprint: this.config.orgKeyFingerprint,
+        orgKeyFingerprint: this.wireOrgKeyFingerprint,
       });
       this.scheduleReplayAckTimeout(clientUpdateId);
     } catch (err) {
@@ -1334,16 +1366,13 @@ export class DocumentSyncProvider {
     const stateBytes = Y.encodeStateAsUpdate(this.ydoc);
 
     try {
-      const { encrypted, iv } = await encryptBinary(
-        stateBytes,
-        this.config.documentKey
-      );
+      const { encrypted, iv } = await this.encryptForWire(stateBytes);
       this.send({
         type: 'docCompact',
         encryptedState: encrypted,
         iv,
         replacesUpTo: currentSeq,
-        orgKeyFingerprint: this.config.orgKeyFingerprint,
+        orgKeyFingerprint: this.wireOrgKeyFingerprint,
       });
       this.lastSnapshotSeq = currentSeq;
       this.lastCompactionAttemptAt = Date.now();

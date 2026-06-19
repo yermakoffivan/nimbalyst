@@ -264,6 +264,7 @@ export const CollaborativeTabEditor: React.FC<CollaborativeTabEditorProps> = ({
     urlExtraQuery: activeConfig.urlExtraQuery,
     orgId: activeConfig.orgId,
     documentId: activeConfig.documentId,
+    keyCustody: activeConfig.keyCustody,
     documentKey: activeConfig.documentKey,
   }), [activeConfig]);
 
@@ -387,6 +388,7 @@ export const CollaborativeTabEditor: React.FC<CollaborativeTabEditorProps> = ({
       serverUrl: activeConfig.serverUrl,
       getJwt: activeConfig.getJwt,
       orgId: activeConfig.orgId,
+      keyCustody: activeConfig.keyCustody,
       documentKey: activeConfig.documentKey,
       orgKeyFingerprint: activeConfig.orgKeyFingerprint,
       userId: activeConfig.userId,

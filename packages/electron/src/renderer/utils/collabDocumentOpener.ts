@@ -21,7 +21,15 @@ export interface CollabDocumentConfig {
   orgId: string;
   documentId: string;
   title: string;
-  documentKey: CryptoKey;
+  /**
+   * Epic H2 key custody. `legacy-e2e` (default): client encrypts/decrypts doc
+   * data with `documentKey`. `server-managed`: the server holds the per-team
+   * DEK and encrypts at rest, so the client syncs PLAINTEXT and `documentKey`
+   * is absent.
+   */
+  keyCustody?: 'legacy-e2e' | 'server-managed';
+  /** Org AES-256-GCM key. Present in legacy-e2e; absent in server-managed. */
+  documentKey?: CryptoKey;
   serverUrl: string;
   getJwt: () => Promise<string>;
   /** Optional extra query appended to revision-history HTTP requests. */
@@ -334,7 +342,8 @@ export async function resolveCollabConfigForUri(
 
     const { orgId, title: resolvedTitle, orgKeyBase64, orgKeyFingerprint, serverUrl, userId, userName, userEmail, pendingUpdateBase64 } = result.config;
     const resolvedDocumentType = documentType ?? result.config.documentType;
-    const documentKey = await importOrgKeyFromBase64(orgKeyBase64);
+    const serverManaged = result.config.keyCustody === 'server-managed';
+    const documentKey = serverManaged ? undefined : await importOrgKeyFromBase64(orgKeyBase64);
     const hasWsProxy = !!window.electronAPI?.documentSync?.wsConnect;
 
     const config: CollabDocumentConfig = {
@@ -343,6 +352,7 @@ export async function resolveCollabConfigForUri(
       documentId,
       title: resolvedTitle,
       documentType: resolvedDocumentType,
+      keyCustody: serverManaged ? 'server-managed' : 'legacy-e2e',
       documentKey,
       orgKeyFingerprint,
       serverUrl,
@@ -414,9 +424,10 @@ export async function openCollabDocumentViaIPC(options: {
 
   const { orgId, documentId, title, orgKeyBase64, serverUrl, userId, userName, userEmail, pendingUpdateBase64 } = result.config;
   const documentType = options.documentType ?? result.config.documentType;
+  const serverManaged = result.config.keyCustody === 'server-managed';
 
-  // Reconstruct CryptoKey from raw base64
-  const documentKey = await importOrgKeyFromBase64(orgKeyBase64);
+  // Reconstruct CryptoKey from raw base64 (legacy only; server-managed has none)
+  const documentKey = serverManaged ? undefined : await importOrgKeyFromBase64(orgKeyBase64);
 
   // Build the real URI now that we have orgId
   const realUri = buildCollabUri(orgId, documentId);
@@ -432,6 +443,7 @@ export async function openCollabDocumentViaIPC(options: {
     documentId,
     title,
     documentType,
+    keyCustody: serverManaged ? 'server-managed' : 'legacy-e2e',
     documentKey,
     serverUrl,
     userId,

@@ -874,6 +874,7 @@ interface ElectronAPI {
         documentId: string;
         title: string;
         documentType?: string;
+        keyCustody?: 'legacy-e2e' | 'server-managed';
         orgKeyBase64: string;
         orgKeyFingerprint?: string;
         serverUrl: string;
@@ -1049,6 +1050,8 @@ interface ElectronAPI {
       success: boolean;
       config?: {
         orgId: string;
+        teamProjectId?: string | null;
+        keyCustody?: 'legacy-e2e' | 'server-managed';
         orgKeyBase64: string;
         orgKeyFingerprint: string | null;
         serverUrl: string;

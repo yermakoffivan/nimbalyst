@@ -21,6 +21,8 @@ import {
   reindexItemRelationships,
   rebuildWorkspaceRelationshipIndex,
 } from './tracker/trackerRelationshipIndexStore';
+import { propagateInverseRelationships } from './tracker/inverseRelationshipWrites';
+import { applyRelationshipFieldWrites } from './tracker/relationshipFieldWrite';
 import { extractFrontmatter, extractCommonFields } from '../utils/frontmatterReader';
 import { VIRTUAL_DOCS, isVirtualPath } from '@nimbalyst/runtime';
 import {
@@ -2948,7 +2950,34 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
       //   requestedSyncMode: payload.syncMode,
       //   updateKeys: Object.keys(payload.updates),
       // });
-      const item = await requireDocumentService(event).updateTrackerItem(payload.itemId, payload.updates);
+      const svc = requireDocumentService(event);
+
+      // Capture the pre-update relationship values so inverse propagation (below)
+      // can diff added/dropped targets. Best-effort by canonical id; if the row
+      // can't be read here we simply skip inverse propagation for this update.
+      let oldData: Record<string, unknown> = {};
+      let oldType: string | null = null;
+      try {
+        const oldRow = await database.query<any>(`SELECT type, data FROM tracker_items WHERE id = $1`, [payload.itemId]);
+        if (oldRow.rows[0]) {
+          oldType = oldRow.rows[0].type ?? null;
+          oldData = parseJsonColumn<Record<string, unknown>>(oldRow.rows[0].data) ?? {};
+        }
+      } catch { /* skip inverse propagation if old data is unavailable */ }
+
+      const updates = { ...payload.updates };
+      if (oldType) {
+        const relWrite = applyRelationshipFieldWrites(
+          updates,
+          globalRegistry.get(oldType)?.fields ?? [],
+          payload.itemId,
+        );
+        if (!relWrite.ok) {
+          throw new Error(`Invalid relationship field "${relWrite.field}": ${relWrite.errors.join('; ')}`);
+        }
+      }
+
+      const item = await svc.updateTrackerItem(payload.itemId, updates);
       const syncPolicy = getEffectiveTrackerSyncPolicy(item.workspace, item.type, payload.syncMode);
 
       if (shouldSyncTrackerPolicy(syncPolicy)) {
@@ -2959,7 +2988,7 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
             await syncTrackerItem(item);
             // console.log('[DocumentService] update-tracker-item synced:', item.id);
           } else {
-            await requireDocumentService(event).updateTrackerItemSyncStatus(item.id, 'pending');
+            await svc.updateTrackerItemSyncStatus(item.id, 'pending');
             // console.log('[DocumentService] update-tracker-item skipped: sync not active for workspace');
           }
         } catch (syncErr) {
@@ -2967,6 +2996,48 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
         }
       } else {
         // console.log('[DocumentService] update-tracker-item no sync: effective mode =', syncPolicy.mode);
+      }
+
+      // Phase 3: materialize inverse relationship fields on target items. Applies
+      // each target write through the same update+sync+reindex flow as the source
+      // (never re-entering this handler, so no inverse-of-inverse loop).
+      try {
+        await propagateInverseRelationships(
+          { id: item.id, type: item.type, issueKey: item.issueKey, title: item.title },
+          updates,
+          oldData,
+          {
+            loadItem: async (id) => {
+              const row = await database.query<any>(`SELECT id, type, data FROM tracker_items WHERE id = $1`, [id]);
+              if (!row.rows[0]) return null;
+              return {
+                id: row.rows[0].id,
+                type: row.rows[0].type,
+                data: parseJsonColumn<Record<string, unknown>>(row.rows[0].data) ?? {},
+              };
+            },
+            applyTargetUpdate: async (targetId, fieldName, value) => {
+              const target = await svc.updateTrackerItem(targetId, { [fieldName]: value });
+              const targetPolicy = getEffectiveTrackerSyncPolicy(target.workspace, target.type, payload.syncMode);
+              if (shouldSyncTrackerPolicy(targetPolicy)) {
+                if (isTrackerSyncActive(target.workspace)) {
+                  await syncTrackerItem(target);
+                } else {
+                  await svc.updateTrackerItemSyncStatus(target.id, 'pending');
+                }
+              }
+              const targetDefs = globalRegistry.get(target.type)?.fields ?? [];
+              const targetData = await database.query<any>(`SELECT data, updated FROM tracker_items WHERE id = $1`, [target.id]);
+              const td = parseJsonColumn<Record<string, unknown>>(targetData.rows[0]?.data) ?? {};
+              const updatedAt = targetData.rows[0]?.updated
+                ? (typeof targetData.rows[0].updated === 'string' ? targetData.rows[0].updated : new Date(targetData.rows[0].updated).toISOString())
+                : null;
+              await reindexItemRelationships(target.workspace, target.id, td, targetDefs, updatedAt, database as any);
+            },
+          },
+        );
+      } catch (invErr) {
+        console.error('[DocumentService] inverse relationship propagation failed:', invErr);
       }
 
       return { success: true, item };

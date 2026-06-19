@@ -96,6 +96,7 @@ export function useTrackerBodyPrewarm({
           serverUrl: config.serverUrl,
           getJwt: config.getJwt,
           orgId: config.orgId,
+          keyCustody: config.keyCustody,
           documentKey: config.documentKey,
           orgKeyFingerprint: config.orgKeyFingerprint,
           userId: config.userId,
