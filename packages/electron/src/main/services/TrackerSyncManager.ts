@@ -58,7 +58,7 @@ import {
 } from './tracker/trackerTypeDefStore';
 import { applyRemoteWorkspaceTrackerSchemaDef } from './TrackerSchemaService';
 import { windows, windowStates } from '../window/windowState';
-import { getEffectiveTrackerSyncPolicy, shouldSyncTrackerPolicy } from './TrackerPolicyService';
+import { getEffectiveTrackerSyncPolicy, decideBackfillAction } from './TrackerPolicyService';
 import { rowToTrackerItem } from '../mcp/tools/trackerToolHandlers';
 
 // ============================================================================
@@ -615,14 +615,38 @@ async function backfillSharedLocalItems(workspacePath: string): Promise<void> {
 
   let queued = 0;
   let skipped = 0;
+  let deleted = 0;
   for (const row of candidates.rows) {
     const policy = getEffectiveTrackerSyncPolicy(workspacePath, row.type as string);
-    if (!shouldSyncTrackerPolicy(policy)) {
+    const item = rowToTrackerItem(row) as TrackerItem;
+    // Per-item gate (NIM-876 / NIM-880): hybrid types sync ONLY flagged items.
+    //   - flagged/shared            -> upsert
+    //   - previously shared (sync_id set) but now UNFLAGGED -> delete from the
+    //       room (propagates an offline unshare; previously this re-uploaded the
+    //       item or left a stale copy behind)
+    //   - never shared + unflagged  -> skip (local-only, no leak)
+    const previouslyShared = row.sync_id != null;
+    const action = decideBackfillAction(policy, item, previouslyShared);
+    if (action === 'skip') {
       skipped++;
       continue;
     }
+    if (action === 'delete') {
+      try {
+        await entry.engine.deleteItem(row.id as string);
+        // Reset the local row so it isn't re-processed (or re-deleted) on the
+        // next reconnect.
+        await db.query(
+          `UPDATE tracker_items SET sync_status = 'local', sync_id = NULL WHERE id = $1`,
+          [row.id],
+        );
+        deleted++;
+      } catch (err) {
+        logger.main.warn('[TrackerSyncManager] backfill deleteItem failed for item', row.id, err);
+      }
+      continue;
+    }
     try {
-      const item = rowToTrackerItem(row) as TrackerItem;
       const payload = trackerItemToPayload(item);
       await entry.engine.upsertItem(payload);
       queued++;
@@ -633,7 +657,7 @@ async function backfillSharedLocalItems(workspacePath: string): Promise<void> {
 
   logger.main.info(
     '[TrackerSyncManager] backfill complete for', workspacePath,
-    'queued:', queued, 'skipped-local-only:', skipped, 'total-candidates:', candidates.rows.length,
+    'queued:', queued, 'deleted:', deleted, 'skipped-local-only:', skipped, 'total-candidates:', candidates.rows.length,
   );
 }
 

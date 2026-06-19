@@ -58,6 +58,19 @@ export interface DocumentSyncConfig {
    */
   documentKey?: CryptoKey;
 
+  /**
+   * Legacy org key for reading PRE-MIGRATION rows in `server-managed` mode.
+   *
+   * When a team migrates legacy-e2e -> server-managed, rows written before the
+   * flip are still AES-ciphertext (the server passes them through with their
+   * original iv; only DEK-fingerprinted rows are server-decrypted to plaintext
+   * with an empty-iv sentinel). To read those old rows the client must AES-
+   * decrypt them with the original org key. This holds that key so server-
+   * managed docs can still surface their legacy history. Optional: absent when
+   * the legacy envelope is unavailable (those rows then skip, never crash).
+   */
+  legacyDocumentKey?: CryptoKey;
+
   /** Current user's ID */
   userId: string;
 

@@ -433,12 +433,30 @@ export class DocumentSyncProvider {
   }
 
   /**
-   * Decrypt bytes from the wire. Server-managed payloads are plaintext (the
-   * server decrypted them), so this just base64-decodes.
+   * Decrypt bytes from the wire.
+   *
+   * Server-managed mode is mixed during/after migration:
+   *   - Rows the server decrypted with the team DEK arrive as PLAINTEXT with an
+   *     empty-iv sentinel ('') -> just base64-decode.
+   *   - PRE-MIGRATION (legacy-e2e) rows are passed through UNCHANGED: AES
+   *     ciphertext with their original (non-empty) iv. These must be AES-
+   *     decrypted with the legacy org key, or they decode to garbage and Yjs
+   *     throws. We fall back to `legacyDocumentKey` (or `documentKey`) for them.
    */
   private async decryptFromWire(encrypted: string, iv: string): Promise<Uint8Array> {
     if (this.serverManaged) {
-      return base64ToUint8Array(encrypted);
+      // Empty iv sentinel => server already decrypted (plaintext passthrough).
+      if (!iv) {
+        return base64ToUint8Array(encrypted);
+      }
+      // Non-empty iv => legacy ciphertext that survived the migration. Decrypt
+      // with the legacy org key if we have it; otherwise surface as an error so
+      // the per-payload catch skips just this row (rather than blanking the doc).
+      const legacyKey = this.config.legacyDocumentKey ?? this.config.documentKey;
+      if (!legacyKey) {
+        throw new Error('legacy-e2e row in server-managed doc but no legacy org key available');
+      }
+      return decryptBinary(encrypted, iv, legacyKey);
     }
     return decryptBinary(encrypted, iv, this.config.documentKey!);
   }
@@ -728,11 +746,12 @@ export class DocumentSyncProvider {
         );
         Y.applyUpdate(this.ydoc, stateBytes, SNAPSHOT_ORIGIN);
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'OperationError') {
-          console.warn('[DocumentSync] Skipping undecryptable snapshot (likely stale key epoch); sync will continue.');
-        } else {
-          throw err;
-        }
+        // Any per-payload failure -- stale key epoch (OperationError), an
+        // un-migrated legacy-e2e row with no legacy key, or corrupt bytes that
+        // make Y.applyUpdate throw (TypeError/RangeError) -- must skip only THIS
+        // payload, never abort the whole sync. One bad row must not blank the
+        // entire document body. See NIM-878.
+        console.warn('[DocumentSync] Skipping undecodable snapshot; sync will continue:', err instanceof Error ? err.message : err);
       }
       this.lastSeq = Math.max(this.lastSeq, msg.snapshot.replacesUpTo);
       this.lastSnapshotSeq = Math.max(this.lastSnapshotSeq, msg.snapshot.replacesUpTo);
@@ -747,11 +766,9 @@ export class DocumentSyncProvider {
         );
         Y.applyUpdate(this.ydoc, updateBytes, REMOTE_ORIGIN);
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'OperationError') {
-          console.warn(`[DocumentSync] Skipping undecryptable update at seq ${update.sequence} (likely stale key epoch).`);
-        } else {
-          throw err;
-        }
+        // Skip only this update (stale key epoch, un-migrated legacy row, or
+        // corrupt bytes); never abort the whole sync. See NIM-878.
+        console.warn(`[DocumentSync] Skipping undecodable update at seq ${update.sequence}:`, err instanceof Error ? err.message : err);
       }
       this.lastSeq = Math.max(this.lastSeq, update.sequence);
     }
@@ -809,16 +826,15 @@ export class DocumentSyncProvider {
         msg.encryptedUpdate,
         msg.iv,
       );
+      Y.applyUpdate(this.ydoc, updateBytes, REMOTE_ORIGIN);
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'OperationError') {
-        console.warn(`[DocumentSync] Skipping undecryptable broadcast at seq ${msg.sequence} (likely stale key epoch).`);
-        this.lastSeq = Math.max(this.lastSeq, msg.sequence);
-        return;
-      }
-      throw err;
+      // Skip only this broadcast (stale key epoch, un-migrated legacy row, or
+      // corrupt bytes that make Y.applyUpdate throw); never abort sync. The
+      // applyUpdate is INSIDE the try so garbage bytes can't escape. See NIM-878.
+      console.warn(`[DocumentSync] Skipping undecodable broadcast at seq ${msg.sequence}:`, err instanceof Error ? err.message : err);
+      this.lastSeq = Math.max(this.lastSeq, msg.sequence);
+      return;
     }
-
-    Y.applyUpdate(this.ydoc, updateBytes, REMOTE_ORIGIN);
     this.lastSeq = Math.max(this.lastSeq, msg.sequence);
 
     // Buffer the update for the review gate

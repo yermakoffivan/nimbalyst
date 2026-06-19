@@ -14,7 +14,7 @@ import {
 import {
   getEffectiveTrackerSyncPolicy,
   getInitialTrackerSyncStatus,
-  shouldSyncTrackerPolicy,
+  shouldSyncTrackerItem,
 } from '../../services/TrackerPolicyService';
 import { isTrackerSyncActive, syncTrackerItem } from '../../services/TrackerSyncManager';
 import { applyHeadlessBodyMarkdown } from '../../services/MainBodyDocService';
@@ -1598,7 +1598,8 @@ export async function handleTrackerCreate(
     const syncPolicy = workspacePath
       ? getEffectiveTrackerSyncPolicy(workspacePath, args.type, model?.sync?.mode)
       : { mode: 'local' as const, scope: 'project' as const };
-    const syncStatus = getInitialTrackerSyncStatus(syncPolicy);
+    // `syncStatus` is computed after `data` is assembled below, because for
+    // hybrid types the decision is per-item (depends on the share flag in data).
 
     // Callers may supply an explicit id (e.g. external imports derive a
     // deterministic, URN-based id so two clients importing the same upstream
@@ -1666,6 +1667,10 @@ export async function handleTrackerCreate(
       return buildTrackerSchemaValidationError('tracker_create', args.type, validationResult.errors);
     }
 
+    // Per-item sync decision (NIM-876): hybrid types only sync flagged items, so
+    // the initial status depends on the assembled `data` (its share flag).
+    const syncStatus = getInitialTrackerSyncStatus(syncPolicy, data);
+
     // Record creation activity
     appendActivity(data, authorIdentity, 'created');
 
@@ -1720,7 +1725,7 @@ export async function handleTrackerCreate(
     if (
       createdItem &&
       workspacePath &&
-      shouldSyncTrackerPolicy(syncPolicy) &&
+      shouldSyncTrackerItem(syncPolicy, data) &&
       isTrackerSyncActive(workspacePath)
     ) {
       try {
@@ -1790,7 +1795,7 @@ export async function handleTrackerCreate(
 
         // Re-sync metadata so peers learn the bodyVersion bump (cold readers
         // invalidate their cache and refetch from `tracker_body_cache`).
-        if (shouldSyncTrackerPolicy(syncPolicy) && isTrackerSyncActive(workspacePath)) {
+        if (shouldSyncTrackerItem(syncPolicy, data) && isTrackerSyncActive(workspacePath)) {
           createdRow = await resolveTrackerRowByReference(db, id, workspacePath);
           createdItem = createdRow ? rowToTrackerItem(createdRow) : createdItem;
           if (createdItem) {
@@ -2095,7 +2100,7 @@ export async function handleTrackerUpdate(
         if (row && workspacePath) {
           const updateModel = globalRegistry.get(refreshedItem.type);
           const syncPolicy = getEffectiveTrackerSyncPolicy(workspacePath, refreshedItem.type, updateModel?.sync?.mode);
-          if (shouldSyncTrackerPolicy(syncPolicy)) {
+          if (shouldSyncTrackerItem(syncPolicy, refreshedItem)) {
             if (isTrackerSyncActive(workspacePath)) {
               try {
                 await syncTrackerItem(refreshedItem);
@@ -2377,7 +2382,7 @@ export async function handleTrackerUpdate(
       if (refreshedRow && effectiveWorkspacePath) {
         const updateModel = globalRegistry.get(refreshedRow.type);
         const syncPolicy = getEffectiveTrackerSyncPolicy(effectiveWorkspacePath, refreshedRow.type, updateModel?.sync?.mode);
-        if (shouldSyncTrackerPolicy(syncPolicy)) {
+        if (shouldSyncTrackerItem(syncPolicy, rowToTrackerItem(refreshedRow))) {
           if (isTrackerSyncActive(effectiveWorkspacePath)) {
             try {
               await syncTrackerItem(rowToTrackerItem(refreshedRow));
@@ -2855,7 +2860,7 @@ export async function handleTrackerAddComment(
     try {
       if (workspacePath) {
         const syncPolicy = getEffectiveTrackerSyncPolicy(workspacePath, row.type);
-        if (shouldSyncTrackerPolicy(syncPolicy)) {
+        if (shouldSyncTrackerItem(syncPolicy, data)) {
           if (isTrackerSyncActive(workspacePath)) {
             const refreshed = await db.query<any>(`SELECT * FROM tracker_items WHERE id = $1`, [row.id]);
             if (refreshed.rows.length > 0) {

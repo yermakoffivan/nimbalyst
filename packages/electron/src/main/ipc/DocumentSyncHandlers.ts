@@ -208,6 +208,9 @@ export function registerDocumentSyncHandlers(): void {
     const keyStart = Date.now();
     let orgKeyBase64 = '';
     let orgKeyFp: string | undefined;
+    // NIM-878: legacy org key for reading PRE-MIGRATION rows in server-managed
+    // mode (rows written before the flip are still AES-ciphertext).
+    let legacyOrgKeyBase64 = '';
     if (!serverManaged) {
       let encryptionKey = await getOrgKey(orgId);
       if (!encryptionKey) {
@@ -244,6 +247,25 @@ export function registerDocumentSyncHandlers(): void {
       orgKeyFp = getOrgKeyFingerprint(orgId) ?? undefined;
     } else {
       logger.main.info('[DocumentSyncHandlers] team', orgId, 'is server-managed; skipping ECDH org-key unwrap');
+      // NIM-878: documents created before this team migrated to server-managed
+      // still have legacy-e2e AES-ciphertext rows on the server (passed through
+      // with their original iv). Best-effort fetch the legacy org key so the
+      // renderer can decrypt those old rows. If unavailable (no envelope), the
+      // old rows are simply skipped on read -- never a crash.
+      try {
+        let legacyKey = await getOrgKey(orgId);
+        if (!legacyKey) {
+          const orgJwt = await getOrgScopedJwt(orgId);
+          await getOrCreateIdentityKeyPair();
+          legacyKey = await fetchAndUnwrapOrgKey(orgId, orgJwt);
+        }
+        if (legacyKey) {
+          const rawBytes = await crypto.subtle.exportKey('raw', legacyKey);
+          legacyOrgKeyBase64 = Buffer.from(rawBytes).toString('base64');
+        }
+      } catch (err) {
+        logger.main.info('[DocumentSyncHandlers] no legacy org key for server-managed migration read (pre-migration rows may not load):', err);
+      }
     }
     logPhase('total', handlerStart);
 
@@ -300,6 +322,7 @@ export function registerDocumentSyncHandlers(): void {
         documentType: resolvedDocumentType,
         keyCustody: serverManaged ? 'server-managed' : 'legacy-e2e',
         orgKeyBase64,
+        legacyOrgKeyBase64,
         orgKeyFingerprint: orgKeyFp,
         serverUrl,
         userId,
