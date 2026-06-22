@@ -1493,13 +1493,34 @@ export async function handleTrackerGet(
     // Schema-defined custom fields (e.g. github-pr's prNumber/author/branches)
     // live in customFields, not on the known-field whitelist above. Render them
     // so cold readers see them in the summary as well as the structured payload.
-    if (item.customFields && Object.keys(item.customFields).length > 0) {
+    // Drop internal/system keys that leak into the bag (sync bookkeeping or
+    // values already rendered as top-level fields) so only genuine schema
+    // fields surface.
+    const internalCustomFieldKeys = new Set([
+      "typeTags",
+      "issueNumber",
+      "issueKey",
+      "archived",
+      "source",
+      "syncStatus",
+      "bodyVersion",
+      "labelsMap",
+      "activity",
+      "comments",
+      "linkedSessions",
+    ]);
+    const displayCustomFields: Record<string, any> = {};
+    if (item.customFields) {
       for (const [key, value] of Object.entries(item.customFields)) {
         if (value === undefined || value === null) continue;
-        const rendered =
-          typeof value === "object" ? JSON.stringify(value) : String(value);
-        lines.push(`**${key}**: ${rendered}`);
+        if (internalCustomFieldKeys.has(key)) continue;
+        displayCustomFields[key] = value;
       }
+    }
+    for (const [key, value] of Object.entries(displayCustomFields)) {
+      const rendered =
+        typeof value === "object" ? JSON.stringify(value) : String(value);
+      lines.push(`**${key}**: ${rendered}`);
     }
     lines.push(`**ID**: ${item.id}`);
     lines.push(`**Updated**: ${item.updated}`);
@@ -1535,10 +1556,11 @@ export async function handleTrackerGet(
         owner: item.owner || undefined,
         dueDate: item.dueDate || undefined,
         // Surface schema-defined custom fields (e.g. github-pr's prNumber) that
-        // are otherwise dropped by the known-field whitelist above.
+        // are otherwise dropped by the known-field whitelist above. Uses the
+        // same internal-key filtering as the summary so the bag is clean.
         customFields:
-          item.customFields && Object.keys(item.customFields).length > 0
-            ? item.customFields
+          Object.keys(displayCustomFields).length > 0
+            ? displayCustomFields
             : undefined,
       },
     };
