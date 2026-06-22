@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Contextual tips now fill empty AI sessions immediately and on every empty session, instead of after a delay and only once per app launch.
 
 ### Fixed
+- The Themes, Shared Links, and Database settings panels now open instead of snapping back to the first agent provider.
 - A session can now spawn child sessions again after several have finished — the limit is on how many run at once, not a lifetime total.
 - The welcome dialog no longer re-appears on a slow or busy startup after you've already completed onboarding.
 - Restarting the app no longer occasionally loses your open project windows and drops you back on the Workspace Manager.
