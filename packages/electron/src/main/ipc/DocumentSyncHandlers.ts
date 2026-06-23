@@ -799,6 +799,11 @@ export function registerDocumentSyncHandlers(): void {
 
     let orgKeyBase64 = '';
     let orgKeyFingerprint: string | null = null;
+    // NIM-906: legacy org key for reading PRE-MIGRATION doc-index TITLE rows in
+    // server-managed mode (titles written before the flip are still AES
+    // ciphertext, passed through by the server with their original iv). Mirrors
+    // the doc-body path (NIM-878).
+    let legacyOrgKeyBase64 = '';
     if (!serverManaged) {
       let encryptionKey = await getOrgKey(orgId);
       if (!encryptionKey) {
@@ -821,6 +826,23 @@ export function registerDocumentSyncHandlers(): void {
       orgKeyFingerprint = (await getOrgKeyFingerprint(orgId)) ?? null;
     } else {
       logger.main.info('[DocumentSyncHandlers] index for', orgId, 'is server-managed; skipping ECDH org-key unwrap');
+      // NIM-906: best-effort fetch the legacy org key so the renderer can read
+      // (and self-heal) pre-migration ciphertext titles. If unavailable, those
+      // titles surface as locked entries rather than raw base64 -- never a crash.
+      try {
+        let legacyKey = await getOrgKey(orgId);
+        if (!legacyKey) {
+          const orgJwt = await getOrgScopedJwt(orgId);
+          await getOrCreateIdentityKeyPair();
+          legacyKey = await fetchAndUnwrapOrgKey(orgId, orgJwt);
+        }
+        if (legacyKey) {
+          const rawBytes = await crypto.subtle.exportKey('raw', legacyKey);
+          legacyOrgKeyBase64 = Buffer.from(rawBytes).toString('base64');
+        }
+      } catch (err) {
+        logger.main.info('[DocumentSyncHandlers] no legacy org key for server-managed index (pre-migration titles may show as locked):', err);
+      }
     }
     const serverUrl = getCollabSyncWsUrl();
 
@@ -837,6 +859,9 @@ export function registerDocumentSyncHandlers(): void {
         teamProjectId: team.teamProjectId ?? null,
         keyCustody: serverManaged ? 'server-managed' : 'legacy-e2e',
         orgKeyBase64,
+        // NIM-906: present only in server-managed mode when a legacy key is
+        // still recoverable; empty otherwise.
+        legacyOrgKeyBase64,
         orgKeyFingerprint,
         serverUrl,
         userId,

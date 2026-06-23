@@ -1055,6 +1055,8 @@ interface ElectronAPI {
         teamProjectId?: string | null;
         keyCustody?: 'legacy-e2e' | 'server-managed';
         orgKeyBase64: string;
+        /** Legacy org key for reading/healing pre-migration ciphertext titles in server-managed mode (NIM-906). */
+        legacyOrgKeyBase64?: string;
         orgKeyFingerprint: string | null;
         serverUrl: string;
         userId: string;

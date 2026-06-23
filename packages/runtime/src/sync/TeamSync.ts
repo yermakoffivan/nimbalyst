@@ -124,6 +124,17 @@ export class TeamSyncProvider {
   private localEntries: Map<string, DocIndexEntry> = new Map();
 
   /**
+   * NIM-906: documentIds whose titles were recovered from a PRE-MIGRATION
+   * legacy ciphertext row (non-empty iv) using the legacy org key. These are
+   * candidates for `backfillLegacyTitles()`, which re-registers them as
+   * plaintext so the server can re-key them under the team DEK.
+   */
+  private legacyTitleDocIds: Set<string> = new Set();
+
+  /** Guards the one-shot auto self-heal so it runs at most once per session. */
+  private legacyTitleBackfillRan = false;
+
+  /**
    * Pending doc index messages queued while disconnected.
    * Unlike DocumentSync (which queues CRDT updates), TeamSync was silently
    * dropping doc index mutations when offline. This queue ensures register,
@@ -441,6 +452,26 @@ export class TeamSyncProvider {
 
     // Replay any doc index mutations that were queued while disconnected
     this.replayPendingDocIndexMessages();
+
+    // NIM-906: self-heal any PRE-MIGRATION ciphertext titles we could recover.
+    this.maybeAutoBackfillLegacyTitles();
+  }
+
+  /**
+   * NIM-906: one-shot self-heal. If this client recovered any legacy ciphertext
+   * titles (it holds the legacy org key), re-register them as plaintext so the
+   * server re-keys them under the team DEK and the whole team sees real titles.
+   * Runs at most once per session and only matters for migrated teams that were
+   * left with un-rekeyed titles; a no-op everywhere else.
+   */
+  private maybeAutoBackfillLegacyTitles(): void {
+    if (this.legacyTitleBackfillRan) return;
+    if (!this.serverManaged || !this.config.legacyOrgKey) return;
+    if (this.legacyTitleDocIds.size === 0) return;
+    this.legacyTitleBackfillRan = true;
+    void this.backfillLegacyTitles().catch((err) => {
+      console.warn('[TeamSync] auto legacy-title backfill failed:', err);
+    });
   }
 
   private handleMemberAdded(msg: TeamMemberAddedMessage): void {
@@ -500,6 +531,9 @@ export class TeamSyncProvider {
       this.teamState.documents = documents;
     }
     this.config.onDocumentsLoaded?.(documents);
+
+    // NIM-906: self-heal any PRE-MIGRATION ciphertext titles we could recover.
+    this.maybeAutoBackfillLegacyTitles();
   }
 
   private async handleDocIndexBroadcast(msg: TeamDocIndexBroadcastMessage): Promise<void> {
@@ -584,10 +618,11 @@ export class TeamSyncProvider {
   }
 
   private async decryptEntry(encrypted: EncryptedDocIndexEntry): Promise<DocIndexEntry> {
-    // Server-managed: the title arrives as plaintext (the server decrypted it).
-    const title = this.serverManaged
-      ? encrypted.encryptedTitle
-      : await decryptTitle(encrypted.encryptedTitle, encrypted.titleIv, this.config.encryptionKey!);
+    const title = await this.decryptTitleFromWire(
+      encrypted.documentId,
+      encrypted.encryptedTitle,
+      encrypted.titleIv,
+    );
     return {
       documentId: encrypted.documentId,
       title,
@@ -596,6 +631,82 @@ export class TeamSyncProvider {
       createdAt: encrypted.createdAt,
       updatedAt: encrypted.updatedAt,
     };
+  }
+
+  /**
+   * NIM-906: resolve a wire title to plaintext. Mirrors
+   * `DocumentSync.decryptFromWire` for the doc-index title path.
+   *
+   * Server-managed mode is MIXED during/after the legacy-e2e -> server-managed
+   * migration:
+   *   - Empty-iv sentinel ('') => the server already decrypted the title with
+   *     the team DEK; it is plaintext, pass it through.
+   *   - Non-empty iv => a PRE-MIGRATION row the server passed through unchanged
+   *     (still AES ciphertext under the old org key). Decrypt it with the
+   *     retained legacy org key, and record it so `backfillLegacyTitles()` can
+   *     re-register it as plaintext. With no legacy key we THROW so the caller
+   *     marks the entry `decryptFailed` (locked) rather than rendering the raw
+   *     base64 ciphertext as a title (which the tree builder shreds on '/').
+   */
+  private async decryptTitleFromWire(
+    documentId: string,
+    encryptedTitle: string,
+    titleIv: string,
+  ): Promise<string> {
+    if (this.serverManaged) {
+      if (!titleIv) {
+        return encryptedTitle;
+      }
+      if (!this.config.legacyOrgKey) {
+        throw new Error(
+          'legacy-e2e doc-index title in a server-managed team but no legacy org key is available',
+        );
+      }
+      const title = await decryptTitle(encryptedTitle, titleIv, this.config.legacyOrgKey);
+      this.legacyTitleDocIds.add(documentId);
+      return title;
+    }
+    return decryptTitle(encryptedTitle, titleIv, this.config.encryptionKey!);
+  }
+
+  /**
+   * NIM-906: re-register every legacy doc-index title this client recovered
+   * (decrypted from a non-empty-iv ciphertext row) as PLAINTEXT, so the
+   * server DEK-encrypts it at rest, stamps the current fingerprint, and
+   * broadcasts it back to the whole team with the empty-iv sentinel. This is
+   * the only path that can heal a team whose titles were left as ciphertext by
+   * the migration — only a client holding the legacy org key can recover the
+   * plaintext (the server never had that zero-knowledge key).
+   *
+   * Idempotent: once a title is re-registered as plaintext the server serves it
+   * with an empty iv, so it is no longer recorded as legacy on the next load.
+   * Returns the number of titles re-registered.
+   */
+  async backfillLegacyTitles(): Promise<number> {
+    if (!this.serverManaged || !this.config.legacyOrgKey) return 0;
+    // Claim the work synchronously (before the first await) so a concurrent
+    // caller — e.g. the auto self-heal racing an explicit repair — sees an
+    // empty set and doesn't double-register the same titles.
+    const ids = Array.from(this.legacyTitleDocIds);
+    this.legacyTitleDocIds.clear();
+    let count = 0;
+    const failed: string[] = [];
+    for (const documentId of ids) {
+      const entry = this.localEntries.get(documentId);
+      if (!entry || entry.decryptFailed) continue;
+      try {
+        await this.updateDocumentTitle(documentId, entry.title);
+        count += 1;
+      } catch (err) {
+        failed.push(documentId); // allow a later retry
+        console.warn('[TeamSync] backfillLegacyTitles re-register failed for', documentId, err);
+      }
+    }
+    for (const documentId of failed) this.legacyTitleDocIds.add(documentId);
+    if (count > 0) {
+      console.log('[TeamSync] backfilled', count, 'legacy doc-index title(s) as plaintext');
+    }
+    return count;
   }
 
   private send(message: TeamClientMessage): void {

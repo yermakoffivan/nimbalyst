@@ -182,6 +182,19 @@ function MigrationModal({
         throw new Error(res?.error || 'Migration failed');
       }
       setItemsMarked(typeof res.itemsMarked === 'number' ? res.itemsMarked : null);
+
+      // NIM-906: reconnect the doc-index provider in server-managed mode so it
+      // picks up the legacy org key and self-heals pre-migration ciphertext
+      // titles (re-registering them as plaintext) right after the cutover,
+      // rather than leaving the shared-document list as base64 garbage.
+      try {
+        const { destroyTeamSync, initSharedDocuments } = await import('../../../store/atoms/collabDocuments');
+        destroyTeamSync(workspacePath);
+        await initSharedDocuments(workspacePath);
+      } catch (reconnectErr) {
+        console.warn('[H2Migration] post-migration doc-index reconnect failed:', reconnectErr);
+      }
+
       setState('done');
       onMigrated();
     } catch (err) {
