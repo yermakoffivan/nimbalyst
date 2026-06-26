@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude Code sessions store and sync far less redundant data (no more full original-file copies on every edit), shrinking the local database and mobile transfers.
 - Updating a tracker item no longer links it to the current AI session unless you ask, so sessions stop accumulating items the agent merely touched.
 - Collab mode's document tree and AI chat panels can now be collapsed, and the layout is remembered per workspace.
+- Linked sessions now appear at the top of a tracker item's detail, so you can jump back into a session without scrolling past the description and comments.
 
 ### Fixed
 - AI session status no longer stays stuck on "running" in the mobile app after a turn finishes on desktop.
