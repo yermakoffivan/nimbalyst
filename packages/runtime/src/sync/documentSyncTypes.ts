@@ -75,6 +75,17 @@ export interface DocumentSyncConfig {
    */
   legacyDocumentKey?: CryptoKey;
 
+  /**
+   * NIM-959: every candidate legacy org-key epoch for reading PRE-MIGRATION
+   * rows in `server-managed` mode. A team that rotated its org key while still
+   * legacy-e2e can have content rows spanning multiple epochs; the doc-content
+   * read path must try each (the doc INDEX path already does this for titles,
+   * NIM-906/910). `decryptFromWire` tries these in order until one succeeds, so
+   * a snapshot written under a now-archived epoch still decrypts instead of
+   * blanking the document body. Superset of `legacyDocumentKey` when present.
+   */
+  legacyDocumentKeys?: CryptoKey[];
+
   /** Current user's ID */
   userId: string;
 
