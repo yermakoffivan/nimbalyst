@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
+<!-- Bug fixes go here -->
+- New AI sessions now appear immediately instead of waiting for sync to connect.
 - Linking tracker items now reliably updates both sides and no longer goes stale or drops an item's other links after syncing — including when the AI sets the link.
 - Mobile voice mode now shows clear Pause and Cancel buttons by the floating mic, so a single tap reliably pauses or stops voice mode.
 - Another session can now read an OpenAI Codex session's last reply through the session-summary tools, matching Claude Code sessions.
