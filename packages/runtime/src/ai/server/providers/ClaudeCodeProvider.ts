@@ -109,6 +109,7 @@ import {
   mapTaskUpdatedPatchStatus,
   shouldApplyTaskUpdatedStatus,
   isNotificationFlushResult,
+  shouldArmGraceTimerForResult,
   shouldContinueWithTaskResults,
   buildTaskResultContinuationMessage,
   type DrainExitCause,
@@ -919,14 +920,26 @@ export class ClaudeCodeProvider extends BaseAgentProvider {
           // complete on the still-open stdin while still letting the turn
           // finish in a bounded amount of time.
           if (typeof chunk === 'object' && chunk !== null) {
-            if (chunk.type === 'result' && resultReceivedTime === null) {
+            // A notification-flush result (num_turns=0, no output, emitted on
+            // resume before the real turn runs) is NOT end-of-turn. Arming the
+            // grace timer on it starts a 5s-silence countdown while the CLI is
+            // still working — during a long background sub-agent (minutes of
+            // main-stream silence) the timer fires, ends the control channel,
+            // and every later canUseTool/hook fails "Stream closed" while the
+            // subprocess runs away. Only arm on the REAL result. See NIM-1470.
+            const armsGraceTimer = shouldArmGraceTimerForResult(
+              chunk,
+              sawTaskNotificationThisTurn,
+              sawAssistantOutputThisTurn,
+            );
+            if (armsGraceTimer && resultReceivedTime === null) {
               resultReceivedTime = Date.now();
               resultReceivedChunkCount = chunkCount;
               console.log(`[CLAUDE-CODE] RESULT_MESSAGE_RECEIVED: turnElapsed=${resultReceivedTime - queryStartTime}ms chunkCount=${chunkCount} subtype="${chunk.subtype}" isError=${chunk.is_error === true}`);
               armPromptEndTimer('grace-period-after-result');
             } else if (resultReceivedTime !== null) {
-              // Activity continued after result -- reset the grace timer so
-              // we don't kill stdin while the binary is still working.
+              // Activity continued after the real result -- reset the grace
+              // timer so we don't kill stdin while the binary is still working.
               armPromptEndTimer('grace-period-reset-on-activity');
             }
           }

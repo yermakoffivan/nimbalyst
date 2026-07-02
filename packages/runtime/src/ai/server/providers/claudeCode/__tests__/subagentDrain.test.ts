@@ -8,6 +8,7 @@ import {
   mapTaskUpdatedPatchStatus,
   shouldApplyTaskUpdatedStatus,
   isNotificationFlushResult,
+  shouldArmGraceTimerForResult,
   shouldContinueWithTaskResults,
   buildTaskResultContinuationMessage,
 } from '../subagentDrain';
@@ -128,6 +129,36 @@ describe('isNotificationFlushResult', () => {
       isNotificationFlushResult({ ...flushResult, subtype: 'error_during_execution' }, true, false),
     ).toBe(false);
     expect(isNotificationFlushResult({ ...flushResult, is_error: true }, true, false)).toBe(false);
+  });
+});
+
+describe('shouldArmGraceTimerForResult', () => {
+  // Regression: NIM-1470 follow-up. The grace-period timer that ends the
+  // control channel after N seconds of stream silence must NOT arm on the
+  // notification-flush result — the CLI keeps working (minutes of silence
+  // during a background sub-agent), so arming there ended the channel mid-turn
+  // and every later Bash tool_result failed "Stream closed" while the
+  // subprocess ran away (chunkCount climbing past 400, promptController=ended).
+  const flushResult = { type: 'result', subtype: 'success', is_error: false, num_turns: 0, result: '' };
+  const realResult = { type: 'result', subtype: 'success', is_error: false, num_turns: 3, result: 'answer' };
+
+  it('does NOT arm on a notification-flush result (the runaway-subprocess bug)', () => {
+    expect(shouldArmGraceTimerForResult(flushResult, true, false)).toBe(false);
+  });
+
+  it('arms on the real turn result', () => {
+    expect(shouldArmGraceTimerForResult(realResult, true, false)).toBe(true);
+  });
+
+  it('arms on a plain result when no task notification preceded it', () => {
+    // Without a preceding task notification it is not a flush, so it is the
+    // real end-of-turn and must arm (unchanged behavior for normal turns).
+    expect(shouldArmGraceTimerForResult(flushResult, false, false)).toBe(true);
+  });
+
+  it('never arms on a non-result chunk', () => {
+    expect(shouldArmGraceTimerForResult({ type: 'assistant' }, true, false)).toBe(false);
+    expect(shouldArmGraceTimerForResult({ type: 'user' }, false, false)).toBe(false);
   });
 });
 

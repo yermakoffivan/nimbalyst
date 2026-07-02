@@ -109,6 +109,24 @@ export function isNotificationFlushResult(
   );
 }
 
+/**
+ * Decide whether a `result` chunk should arm the grace-period timer that ends
+ * the control channel after N seconds of stream silence. A notification-flush
+ * result must NOT arm it: the CLI is still working (often minutes of
+ * main-stream silence while a background sub-agent runs), so ending the channel
+ * mid-turn makes every later canUseTool/hook request fail "Stream closed" and
+ * leaks the runaway subprocess. Only the REAL result arms the timer. Non-result
+ * chunks never arm it. See NIM-1470.
+ */
+export function shouldArmGraceTimerForResult(
+  chunk: { type?: string; subtype?: string; is_error?: boolean; num_turns?: number; result?: string },
+  sawTaskNotificationThisTurn: boolean,
+  sawAssistantOutputThisTurn: boolean,
+): boolean {
+  if (chunk.type !== 'result') return false;
+  return !isNotificationFlushResult(chunk, sawTaskNotificationThisTurn, sawAssistantOutputThisTurn);
+}
+
 /** Terminal task_notification captured while draining, for the continuation turn. */
 export interface TaskTerminalNotification {
   taskId: string;
