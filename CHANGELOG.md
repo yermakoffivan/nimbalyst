@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Double-click an editor tab to maximize the editor area in Files, Agent, and Shared Docs modes, then double-click again to restore the previous layout.
 - Customize the navigation gutter: hide or show any icon and drag to reorder them via a Customize Gutter popover (right-click the gutter), with preferences applied across all projects.
 
 ### Changed

@@ -169,6 +169,7 @@ A concise reference of all features in the product. Keep this up to date as feat
 - Reopen closed tab (Cmd+Shift+T)
 - Navigate between tabs (Cmd+Option+Left/Right)
 - Close tab (Cmd+W)
+- Double-click a tab to maximize the editor to the whole window (collapses surrounding panels); double-click again to restore — works in Files, Agent, and Shared Docs modes
 - Unified editor header bar
 - Extension-contributed document headers
 
