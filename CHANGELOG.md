@@ -15,11 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Trim the session model picker: each provider's settings page has checkboxes to hide models you don't use, and the Claude Agent SDK and Claude Code CLI sets can be enabled or disabled independently.
 - Agent sessions no longer include tracker guidance in the system prompt when trackers are disabled for the workspace, reducing per-request token usage.
 
 ### Fixed
 <!-- Bug fixes go here -->
-- Agent sessions use fewer tokens upfront: tool definitions stay deferred until used regardless of model, the always-loaded tool set was cut to an essential subset with slimmer schemas, and projects with many worktrees no longer load duplicate copies of every project command.
+- Agent sessions defer MCP tool definitions until used on all models, and multi-worktree projects no longer load duplicate copies of project commands.
 
 ### Removed
 <!-- Removed features go here -->

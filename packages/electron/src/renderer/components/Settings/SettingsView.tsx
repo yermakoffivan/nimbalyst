@@ -807,6 +807,37 @@ export function SettingsView({
       }
     };
 
+    // Hidden-set (denylist) handlers, parameterized by provider id so the Claude
+    // panel can drive both `claude-code` (SDK) and `claude-code-cli` (subscription)
+    // from one place. A model is "visible" when it is NOT in `hiddenModels`.
+    const makeVisibilityHandlers = (providerId: string) => ({
+      onModelVisibilityToggle: (modelId: string, visible: boolean) => {
+        setProviders(prev => {
+          const hidden = prev[providerId]?.hiddenModels || [];
+          const updated = visible
+            ? hidden.filter(m => m !== modelId)
+            : [...new Set([...hidden, modelId])];
+          return {
+            ...prev,
+            [providerId]: { ...prev[providerId], hiddenModels: updated },
+          };
+        });
+        debouncedSave();
+      },
+      onSetAllVisible: (visible: boolean) => {
+        setProviders(prev => {
+          const hidden = visible
+            ? []
+            : (availableModels[providerId] || []).map(m => m.id);
+          return {
+            ...prev,
+            [providerId]: { ...prev[providerId], hiddenModels: hidden },
+          };
+        });
+        debouncedSave();
+      },
+    });
+
     // Helper to wrap provider panels with override wrapper when in project scope
     const wrapWithOverride = (providerId: string, providerName: string, panel: React.ReactNode) => {
       if (scope === 'project' && workspacePath) {
@@ -835,6 +866,14 @@ export function SettingsView({
           'Claude Agent',
           <ClaudeCodePanel
             {...commonProps}
+            {...makeVisibilityHandlers('claude-code')}
+            cli={{
+              config: providers['claude-code-cli'] || { enabled: true, testStatus: 'idle' },
+              availableModels: availableModels['claude-code-cli'] || [],
+              loading: loading['claude-code-cli'] || false,
+              onToggle: (enabled: boolean) => handleProviderToggle('claude-code-cli', enabled),
+              ...makeVisibilityHandlers('claude-code-cli'),
+            }}
             scope={scope === 'project' ? 'project' : 'user'}
             workspacePath={scope === 'project' ? workspacePath ?? undefined : undefined}
           />,
