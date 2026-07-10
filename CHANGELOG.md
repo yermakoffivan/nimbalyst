@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Any extension can now enable a native-code backend module, approved once via a single consent prompt instead of an allowlist or a per-workspace dialog.
+- Tracker link chips in chat now show more of the item title before truncating.
 
 ### Fixed
 <!-- Bug fixes go here -->
