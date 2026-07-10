@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Long Claude Code thinking phases no longer end early with a "no output for 120s" stream-silent error.
 - Codex tool results no longer appear as stray "message elided" warnings in iOS transcripts.
 
 ### Removed
