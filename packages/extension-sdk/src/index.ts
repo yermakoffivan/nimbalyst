@@ -63,6 +63,18 @@ export {
 } from './documentPath.js';
 export { MaterialSymbol } from './MaterialSymbol.js';
 
+// Re-export host-owned tracker reference UI. Extensions persist only reference
+// keys while Nimbalyst owns live resolution, previews, selection, and opening.
+export {
+  TrackerReferenceChip,
+  TrackerReferencePicker,
+  navigateToTrackerReference,
+  useResolvedTrackerReference,
+  type ResolvedTrackerReference,
+  type TrackerReferenceChipProps,
+  type TrackerReferencePickerProps,
+} from './trackerReferences.js';
+
 // Re-export read-only host factory (for web viewers and testing)
 export {
   createReadOnlyHost,

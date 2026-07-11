@@ -102,6 +102,24 @@ describe('TrackerReferenceChip', () => {
     ).toBe('true');
   });
 
+  it('supports a compact extension-editor variant without losing live resolution', () => {
+    const store = createStore();
+    store.set(
+      trackerItemsMapAtom,
+      new Map([[trackerRecord.id, trackerRecord]]),
+    );
+
+    const { container } = render(
+      <Provider store={store}>
+        <TrackerReferenceChip referenceKey="NIM-1" variant="compact" />
+      </Provider>,
+    );
+
+    expect(container.querySelector('.tracker-reference-chip-key')?.textContent).toBe('NIM-1');
+    expect(container.querySelector('.tracker-reference-chip-title')).toBeNull();
+    expect(container.querySelector('.tracker-reference-chip')?.getAttribute('data-resolved')).toBe('true');
+  });
+
   it.each(['done', 'completed', 'implemented', 'decided'])(
     'makes the %s state unmistakably complete',
     status => {

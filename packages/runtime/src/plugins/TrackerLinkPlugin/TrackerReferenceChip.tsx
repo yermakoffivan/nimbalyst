@@ -143,13 +143,16 @@ function MetadataBadge({
   );
 }
 
-interface TrackerReferenceChipProps {
+export interface TrackerReferenceChipProps {
   referenceKey: string;
   nodeKey?: string;
+  /** Compact chips omit the live title while retaining preview and navigation. */
+  variant?: 'default' | 'compact';
 }
 
 export function TrackerReferenceChip({
   referenceKey,
+  variant = 'default',
 }: TrackerReferenceChipProps): JSX.Element {
   const resolved = useResolvedTrackerReference(referenceKey);
   const [open, setOpen] = React.useState(false);
@@ -239,7 +242,7 @@ export function TrackerReferenceChip({
         >
           {label}
         </span>
-        {title ? (
+        {title && variant === 'default' ? (
           <span
             className="tracker-reference-chip-title"
             style={{
