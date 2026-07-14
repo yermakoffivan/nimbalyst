@@ -35,8 +35,8 @@ import {
   getSessionToken,
   getSessionTokenForAccount,
   isAuthenticated,
-  refreshSession,
-  refreshSessionForAccount,
+  refreshPersonalSession,
+  refreshPersonalSessionForAccount,
   onAuthStateChange,
   updateSessionToken,
   getStytchUserId,
@@ -44,7 +44,7 @@ import {
   getPersonalOrgId,
   getPersonalUserId,
 } from './StytchAuthService';
-import { asPersonalJwt, asTeamJwt, type PersonalJwt, type TeamJwt } from '@nimbalyst/runtime';
+import { asTeamJwt, type PersonalJwt, type TeamJwt } from '@nimbalyst/runtime';
 import { getDatabase } from '../database/initialize';
 import {
   backfillProjection,
@@ -213,6 +213,7 @@ interface CachedOrgJwt {
 
 /** Cache of org-scoped JWTs. Key is orgId. */
 const orgJwtCache = new Map<string, CachedOrgJwt>();
+const orgJwtExchangeSingleFlight = createSingleFlight<string, TeamJwt>();
 
 /** Buffer before JWT exp to refresh early (60 seconds). */
 const JWT_REFRESH_BUFFER_MS = 60 * 1000;
@@ -242,6 +243,15 @@ export async function getOrgScopedJwt(
   if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
     return cached.jwt;
   }
+
+  const exchangeKey = `${accountOrgId ?? 'primary'}:${orgId}`;
+  return orgJwtExchangeSingleFlight(exchangeKey, () => exchangeOrgScopedJwt(orgId, accountOrgId));
+}
+
+async function exchangeOrgScopedJwt(
+  orgId: string,
+  accountOrgId?: string,
+): Promise<TeamJwt> {
   // logger.main.info(`[TeamService] Org JWT cache miss for ${orgId}, exchanging session...`);
 
   // Need to exchange -- use the correct account's session token
@@ -283,10 +293,10 @@ export async function getOrgScopedJwt(
     let refreshed = false;
     try {
       if (accountOrgId) {
-        const freshJwt = await refreshSessionForAccount(accountOrgId);
+        const freshJwt = await refreshPersonalSessionForAccount(accountOrgId);
         refreshed = !!freshJwt;
       } else {
-        refreshed = await refreshSession();
+        refreshed = await refreshPersonalSession(httpUrl);
       }
     } catch {
       // Network error -- can't retry
@@ -438,25 +448,48 @@ async function fetchTeamApi(path: string, method: string, body?: unknown, orgId?
     throw new Error('Not authenticated. Sign in first.');
   }
 
+  // Personal JWTs are short-lived. Refresh before sending one that is already
+  // inside the same 60s safety window used by the org-JWT cache, so routine
+  // team discovery does not pay for an expected 401 on every expiry cycle.
+  if (!orgId) {
+    const exp = getJwtExp(jwt);
+    if (exp && (exp * 1000) - JWT_REFRESH_BUFFER_MS <= Date.now()) {
+      try {
+        if (accountOrgId) {
+          const freshJwt = await refreshPersonalSessionForAccount(accountOrgId);
+          if (freshJwt) jwt = freshJwt;
+        } else if (await refreshPersonalSession(getCollabServerUrl())) {
+          const freshJwt = getPersonalSessionJwt();
+          if (freshJwt) jwt = freshJwt;
+        }
+      } catch {
+        // Keep the current token and let the existing 401 recovery path make
+        // the final authentication decision.
+      }
+    }
+  }
+
   let response = await makeRequest(jwt);
 
   // On 401, retry once: refresh personal session or re-exchange org JWT
   if (response.status === 401) {
     if (accountOrgId && !orgId) {
-      // Non-primary account JWT rejected -- try refreshing the secondary account's session
+      // Refresh the account's PERSONAL lane. For the primary account the active
+      // Stytch session may currently be team-scoped, so a generic refresh is not
+      // sufficient to replace an expired personalSessionJwt.
       logger.main.info(`[TeamService] Got 401 on account JWT for ${accountOrgId}, attempting refresh...`);
-      const freshJwt = await refreshSessionForAccount(accountOrgId);
+      const freshJwt = await refreshPersonalSessionForAccount(accountOrgId);
       if (freshJwt) {
-        logger.main.info(`[TeamService] Secondary account ${accountOrgId} refreshed, retrying request...`);
-        response = await makeRequest(asPersonalJwt(freshJwt));
+        logger.main.info(`[TeamService] Account ${accountOrgId} personal JWT refreshed, retrying request...`);
+        response = await makeRequest(freshJwt);
       } else {
-        logger.main.warn(`[TeamService] Secondary account ${accountOrgId} refresh failed`);
+        logger.main.warn(`[TeamService] Account ${accountOrgId} personal JWT refresh failed`);
       }
     } else if (!orgId) {
       logger.main.info('[TeamService] Got 401 on personal JWT, refreshing session...');
       let refreshed = false;
       try {
-        refreshed = await refreshSession();
+        refreshed = await refreshPersonalSession(getCollabServerUrl());
       } catch {
         // Network error -- can't retry
       }

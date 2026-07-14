@@ -35,7 +35,7 @@ vi.mock('../../utils/collabSyncUrl', () => ({ getCollabSyncHttpUrl: () => 'https
 
 vi.mock('../jwtOrg', () => ({
   assertJwtMatchesOrg: vi.fn(),
-  getJwtExp: vi.fn(() => Date.now() + 60_000),
+  getJwtExp: vi.fn(() => Math.floor(Date.now() / 1000) + 300),
   AuthContextMismatchError: class AuthContextMismatchError extends Error {},
 }));
 
@@ -48,6 +48,7 @@ vi.mock('../StytchAuthService', () => ({
   isAuthenticated: vi.fn(() => true),
   refreshSession: vi.fn(async () => false),
   refreshSessionForAccount: vi.fn(async () => null),
+  refreshPersonalSessionForAccount: vi.fn(async () => null),
   onAuthStateChange: vi.fn(() => () => {}),
   updateSessionToken: vi.fn(),
   getStytchUserId: vi.fn(() => 'user-1'),
@@ -75,6 +76,8 @@ vi.mock('../SilentTeamEncryptionMigration', () => ({}));
 vi.mock('../TeamAuthBootstrap', () => ({ createTeamAuthBootstrap: (fn: unknown) => fn }));
 
 import { findTeamForWorkspace, invalidateListTeamsCache, registerTeamHandlers } from '../TeamService';
+import { refreshPersonalSessionForAccount } from '../StytchAuthService';
+import { getJwtExp } from '../jwtOrg';
 
 const REMOTE = 'github.com/acme/widgets';
 const REMOTE_HASH = createHash('sha256').update(REMOTE).digest('hex');
@@ -90,6 +93,7 @@ function apiTeamsFetchCallCount(): number {
 
 describe('team:find-for-workspace single-flight (RC4)', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     fetchMock.mockReset();
     gitRemoteMock.mockReset();
     handlers.clear();
@@ -160,6 +164,7 @@ describe('team:find-for-workspace single-flight (RC4)', () => {
 
 describe('listTeams TTL cache + invalidation (RC4)', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     fetchMock.mockReset();
     gitRemoteMock.mockReset();
     handlers.clear();
@@ -196,5 +201,38 @@ describe('listTeams TTL cache + invalidation (RC4)', () => {
     await findTeamForWorkspace('/workspace/one');
 
     expect(apiTeamsFetchCallCount()).toBe(2);
+  });
+
+  it('refreshes the account personal JWT rather than retrying discovery with an active team JWT', async () => {
+    vi.mocked(refreshPersonalSessionForAccount).mockResolvedValueOnce('fresh-personal-jwt' as never);
+    fetchMock
+      .mockResolvedValueOnce({ ok: false, status: 401 })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          teams: [{ orgId: 'org-1', name: 'Widgets Team', gitRemoteHash: REMOTE_HASH, createdAt: new Date().toISOString(), role: 'admin' }],
+        }),
+      });
+
+    await expect(findTeamForWorkspace('/workspace/one')).resolves.toEqual(
+      expect.objectContaining({ orgId: 'org-1' }),
+    );
+    expect(refreshPersonalSessionForAccount).toHaveBeenCalledWith('personal-1');
+  });
+
+  it('refreshes an expiring account personal JWT before sending the request', async () => {
+    vi.mocked(getJwtExp).mockReturnValueOnce(Math.floor(Date.now() / 1000) + 30);
+    vi.mocked(refreshPersonalSessionForAccount).mockResolvedValueOnce('fresh-personal-jwt' as never);
+
+    await expect(findTeamForWorkspace('/workspace/one')).resolves.toEqual(
+      expect.objectContaining({ orgId: 'org-1' }),
+    );
+
+    expect(refreshPersonalSessionForAccount).toHaveBeenCalledWith('personal-1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer fresh-personal-jwt' }),
+    }));
   });
 });

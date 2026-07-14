@@ -53,6 +53,7 @@ vi.mock('../SilentTeamEncryptionMigration', () => ({
 import {
   getPersonalSessionJwt,
   handleAuthCallback,
+  refreshPersonalSession,
   refreshSession,
 } from '../StytchAuthService';
 
@@ -102,6 +103,79 @@ describe('StytchAuthService personal JWT refresh', () => {
 
     expect(getPersonalSessionJwt()).toBe(expiredPersonalJwt);
     await expect(refreshSession('https://sync.example')).resolves.toBe(true);
+    expect(getPersonalSessionJwt()).toBe(freshPersonalJwt);
+  });
+
+  it('exchanges back to the personal org with the latest session token after refreshing a team-scoped session', async () => {
+    const personalUserId = 'member-personal';
+    const teamUserId = 'member-team';
+    const personalOrgId = 'org-personal';
+    const teamOrgId = 'org-team';
+    const expiredPersonalJwt = createJwt({
+      sub: personalUserId,
+      exp: Math.floor(Date.now() / 1000) - 60,
+    });
+    const teamJwt = createJwt({
+      sub: teamUserId,
+      exp: Math.floor(Date.now() / 1000) + 300,
+    });
+    const refreshedTeamJwt = createJwt({
+      sub: teamUserId,
+      exp: Math.floor(Date.now() / 1000) + 300,
+    });
+    const freshPersonalJwt = createJwt({
+      sub: personalUserId,
+      exp: Math.floor(Date.now() / 1000) + 300,
+    });
+
+    await handleAuthCallback({
+      sessionToken: 'initial-session-token',
+      sessionJwt: expiredPersonalJwt,
+      userId: personalUserId,
+      orgId: personalOrgId,
+    });
+
+    // Establish the real-world failure state: the active Stytch session has
+    // been exchanged to a team org while personalSessionJwt remains expired.
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        session_token: 'team-session-token-before-personal-refresh',
+        session_jwt: teamJwt,
+        user_id: teamUserId,
+        org_id: teamOrgId,
+        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      }),
+    });
+    await expect(refreshSession('https://sync.example')).resolves.toBe(true);
+    expect(getPersonalSessionJwt()).toBe(expiredPersonalJwt);
+
+    fetchMock.mockImplementationOnce(async () => ({
+      ok: true,
+      json: async () => ({
+        session_token: 'latest-team-session-token',
+        session_jwt: refreshedTeamJwt,
+        user_id: teamUserId,
+        org_id: teamOrgId,
+        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      }),
+    }));
+    fetchMock.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { sessionToken?: string };
+      if (body.sessionToken !== 'latest-team-session-token') {
+        return { ok: false, status: 401 };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          sessionToken: 'personal-session-token',
+          sessionJwt: freshPersonalJwt,
+        }),
+      };
+    });
+
+    await expect(refreshPersonalSession('https://sync.example')).resolves.toBe(true);
     expect(getPersonalSessionJwt()).toBe(freshPersonalJwt);
   });
 });

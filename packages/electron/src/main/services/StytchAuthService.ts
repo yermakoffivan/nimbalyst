@@ -862,15 +862,26 @@ export function getPersonalSessionJwtForAccount(personalOrgId: string): Personal
  * Refresh the personal-org-scoped JWT via session exchange.
  * Called by SyncManager to keep the personal JWT fresh for session sync.
  */
-export async function refreshPersonalSession(serverUrl: string): Promise<boolean> {
+let inflightPersonalSessionRefresh: Promise<boolean> | null = null;
+
+export function refreshPersonalSession(serverUrl: string): Promise<boolean> {
+  if (inflightPersonalSessionRefresh) {
+    return inflightPersonalSessionRefresh;
+  }
+  inflightPersonalSessionRefresh = doRefreshPersonalSession(serverUrl).finally(() => {
+    inflightPersonalSessionRefresh = null;
+  });
+  return inflightPersonalSessionRefresh;
+}
+
+async function doRefreshPersonalSession(serverUrl: string): Promise<boolean> {
   const personalOrgId = authState.personalOrgId;
   if (!personalOrgId) {
     logger.main.warn('[StytchAuthService] Cannot refresh personal session: no personalOrgId');
     return false;
   }
 
-  const sessionToken = authState.sessionToken;
-  if (!sessionToken) {
+  if (!authState.sessionToken) {
     logger.main.warn('[StytchAuthService] Cannot refresh personal session: no session token');
     return false;
   }
@@ -929,7 +940,10 @@ export async function refreshPersonalSession(serverUrl: string): Promise<boolean
     await refreshSession(serverUrl);
     const httpUrl = serverUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
     const jwt = authState.sessionJwt;
-    if (!jwt) return false;
+    // /auth/refresh rotates the session token. The personal-org exchange must
+    // use the token returned by that refresh, not the token captured before it.
+    const sessionToken = authState.sessionToken;
+    if (!jwt || !sessionToken) return false;
 
     const response = await net.fetch(`${httpUrl}/api/teams/${personalOrgId}/switch`, {
       method: 'POST',
@@ -996,6 +1010,19 @@ export async function refreshPersonalSession(serverUrl: string): Promise<boolean
     logger.main.error('[StytchAuthService] Error refreshing personal session:', error);
     return false;
   }
+}
+
+/** Refresh and return a personal-org JWT for an explicit signed-in account. */
+export async function refreshPersonalSessionForAccount(
+  personalOrgId: string,
+): Promise<PersonalJwt | null> {
+  if (personalOrgId === primaryAccountId) {
+    const refreshed = await refreshPersonalSession(getSyncServerUrl());
+    return refreshed ? getPersonalSessionJwt() : null;
+  }
+
+  const refreshedJwt = await refreshSessionForAccount(personalOrgId);
+  return refreshedJwt ? asPersonalJwt(refreshedJwt) : null;
 }
 
 /**
