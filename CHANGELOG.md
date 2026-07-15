@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Changes to existing functionality go here -->
 - Team encryption is now server-managed for new organizations; legacy organizations migrate silently only after local plaintext collaboration backups succeed, with recovery markers retained if post-cutover verification fails.
 - The Claude Agent model picker no longer lists duplicate "(1M)" rows — current models already run their full context window on their single row.
-- Completed tracker reference chips now show a checkmark and crossed-out text in documents and AI chats.
+- Tracker reference chips now show live workflow-state badges and cross out completed items in documents and AI chats.
 - Mobile session sync now skips messages the mobile transcript never displays, cutting sync storage and traffic.
 - Codex is now enabled by default and the Claude Code CLI is now opt-in; existing choices are preserved.
 - The Git log panel gains improved search and panel controls.
