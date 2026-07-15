@@ -1317,6 +1317,10 @@ export const CollaborativeTabEditor: React.FC<CollaborativeTabEditorProps> = ({
         showSharedDocButton={false}
         showHistoryAction={true}
         showCommonFileActions={false}
+        sharedDocumentLinkTarget={{
+          documentId: activeConfig.documentId,
+          orgId: activeConfig.orgId,
+        }}
         extraActionItems={localOriginActionItems}
       />
 
