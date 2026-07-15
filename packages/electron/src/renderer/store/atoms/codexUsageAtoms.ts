@@ -36,11 +36,15 @@ export interface CodexUsageData {
 
 export const codexUsageAtom = atom<CodexUsageData | null>(null);
 
-// The usage-indicator enabled toggle now lives in the flat-key SettingsService
-// under `ai.showCodexUsageIndicator`. Read it with
-// `useSetting('ai.showCodexUsageIndicator')` and write it with
-// `useSetSetting('ai.showCodexUsageIndicator')` -- it hydrates before React
-// mounts and stays in lockstep across windows via the broadcast.
+// Rail visibility of the usage indicator is governed by the NavigationGutter
+// customization set (the single source of truth). Read it with
+// `useAtomValue(hiddenGutterItemsAtom)` and toggle it with
+// `useSetAtom(toggleGutterItemHiddenAtom)({ id: 'codex-usage', hidden })` from
+// `store/atoms/appSettings`. The gutter's right-click "Show Codex Usage" /
+// "Customize Gutter…" / "Show All" affordances read the same set, so hiding the
+// indicator always has a matching rail-side restore. (The legacy
+// `ai.showCodexUsageIndicator` setting is inert -- kept only for the one-shot
+// `usageIndicatorsMigratedToGutter` migration in main/utils/store.ts.)
 
 export const codexUsageAvailableAtom = atom((get) => {
   const usage = get(codexUsageAtom);

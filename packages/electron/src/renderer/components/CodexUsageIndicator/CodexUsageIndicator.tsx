@@ -14,7 +14,6 @@ import {
   codexUsageSessionColorAtom,
   formatResetTime,
 } from '../../store/atoms/codexUsageAtoms';
-import { useSetting } from '../../hooks/useSetting';
 import { CodexUsagePopover } from './CodexUsagePopover';
 import { refreshCodexUsage } from '../../store/listeners/codexUsageListeners';
 
@@ -28,7 +27,6 @@ interface CodexUsageIndicatorProps {
 export const CodexUsageIndicator: React.FC<CodexUsageIndicatorProps> = ({ className }) => {
   const usage = useAtomValue(codexUsageAtom);
   const isAvailable = useAtomValue(codexUsageAvailableAtom);
-  const isEnabled = useSetting('ai.showCodexUsageIndicator');
   const sessionColor = useAtomValue(codexUsageSessionColorAtom);
 
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
@@ -42,7 +40,7 @@ export const CodexUsageIndicator: React.FC<CodexUsageIndicatorProps> = ({ classN
     await refreshCodexUsage();
   }, []);
 
-  if (!isEnabled || !isAvailable) {
+  if (!isAvailable) {
     return null;
   }
 

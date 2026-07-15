@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Usage indicators (Claude, Codex, Gemini) hidden from the navigation gutter can now be restored by right-clicking the gutter.
 
 ### Removed
 <!-- Removed features go here -->
