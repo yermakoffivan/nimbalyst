@@ -4,7 +4,6 @@ import { FloatingPortal } from '@floating-ui/react';
 import { MaterialSymbol } from '@nimbalyst/runtime';
 import type { TrackerIdentity } from '@nimbalyst/runtime';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
-import { getRecordTitle, getRecordPriority, getRecordStatus, getRecordFieldStr } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
 import {
   TrackerTable,
   TrackerTableGrid,
@@ -36,13 +35,22 @@ import { setSelectedWorkstreamAtom, sessionRegistryAtom, refreshSessionListAtom,
 import { trackerItemsMapAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import { workstreamStateAtom } from '../../store/atoms/workstreamState';
 import { setWindowModeAtom } from '../../store/atoms/windowMode';
-import { defaultAgentModelAtom } from '../../store/atoms/appSettings';
+import { defaultAgentModelAtom, worktreesFeatureAvailableAtom } from '../../store/atoms/appSettings';
 import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
 import { store } from '../../store';
 import { useFloatingMenu } from '../../hooks/useFloatingMenu';
 import { buildTrackerTagOptions } from './trackerTagFilterUtils';
 import { filterTrackerItems, recordSourceKey } from './trackerSavedViews';
 import { useTrackerUnread } from '../../hooks/useTrackerUnread';
+import {
+  createNewWorktreeSessionActionAtom,
+  isGitRepoAtom,
+} from '../../store/actions/sessionHistoryActions';
+import { WorktreeBaseBranchPicker } from '../AgenticCoding/WorktreeBaseBranchPicker';
+import {
+  buildTrackerLaunchContext,
+  type TrackerLaunchContext,
+} from './trackerSessionLaunch';
 
 export type ViewMode = 'list' | 'table' | 'kanban' | 'tag-board';
 
@@ -99,6 +107,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   const [showTagDropdown, setShowTagDropdown] = useState(false);
   const [tagQuery, setTagQuery] = useState('');
   const [highlightedTagIndex, setHighlightedTagIndex] = useState(0);
+  const [pendingWorktreeLaunch, setPendingWorktreeLaunch] = useState<TrackerLaunchContext | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // User's selected default model. Used by handleLaunchSession so the new
@@ -106,6 +115,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   // falling back to claude-code (which fails for Codex-only installs).
   // See nimbalyst#176.
   const defaultModel = useAtomValue(defaultAgentModelAtom);
+  const isWorktreesFeatureAvailable = useAtomValue(worktreesFeatureAvailableAtom);
+  const isGitRepo = useAtomValue(isGitRepoAtom(workspacePath || ''));
 
   useEffect(() => {
     if (!workspacePath) return;
@@ -156,6 +167,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   const setSelectedWorkstream = useSetAtom(setSelectedWorkstreamAtom);
   const setWindowMode = useSetAtom(setWindowModeAtom);
   const refreshSessionList = useSetAtom(refreshSessionListAtom);
+  const createNewWorktreeSession = useSetAtom(createNewWorktreeSessionActionAtom);
 
   /** Navigate to Agent mode and activate a linked session */
   const handleSwitchToAgentMode = useCallback((sessionId: string) => {
@@ -192,6 +204,12 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   /** Launch a new AI session linked to a tracker item */
   const handleLaunchSession = useCallback(async (trackerItemId: string) => {
     try {
+      const itemsMap = store.get(trackerItemsMapAtom);
+      const trackerContext = buildTrackerLaunchContext(
+        trackerItemId,
+        itemsMap.get(trackerItemId),
+      );
+
       // Derive provider from the user's default model rather than hardcoding
       // 'claude-code'. Mirrors AgentMode.createNewSession so a Codex-only
       // workspace launches a Codex session, not a failed claude-code one.
@@ -209,60 +227,16 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         workspaceId: workspacePath,
       });
       if (result?.success && result?.id) {
-        // Look up the tracker item to build a context-aware draft prompt
-        const itemsMap = store.get(trackerItemsMapAtom);
-        const trackerItem = itemsMap.get(trackerItemId);
-
-        if (trackerItem?.system?.documentPath) {
-          // File-backed item: link via file path and pre-fill draft with item context
-          await window.electronAPI.invoke('tracker:link-session', {
-            trackerId: `file:${trackerItem.system.documentPath}`,
-            sessionId: result.id,
-          });
-          // Build a context-rich prompt with the specific item's details
-          const title = getRecordTitle(trackerItem);
-          const status = getRecordStatus(trackerItem);
-          const priority = getRecordPriority(trackerItem);
-          const description = getRecordFieldStr(trackerItem, 'description');
-          const itemId = trackerItem.issueKey || trackerItemId;
-          const lines: string[] = [];
-          lines.push(`implement tracker item ${itemId}: ${title}`);
-          const meta: string[] = [];
-          if (trackerItem.primaryType) meta.push(`type: ${trackerItem.primaryType}`);
-          if (status) meta.push(`status: ${status}`);
-          if (priority) meta.push(`priority: ${priority}`);
-          if (meta.length > 0) lines.push(meta.join(', '));
-          if (description) lines.push(`\n${description}`);
-          lines.push(`\nSource: @${trackerItem.system.documentPath}`);
-          lines.push(`\nUpdate this tracker item's status when done using tracker_update with id "${itemId}".`);
-          await window.electronAPI.invoke('ai:saveDraftInput', result.id,
-            lines.join('\n'), workspacePath);
-        } else {
-          // Native DB item: link by ID
-          await window.electronAPI.invoke('tracker:link-session', {
-            trackerId: trackerItemId,
-            sessionId: result.id,
-          });
-          // Pre-fill draft with item context
-          const title = trackerItem ? getRecordTitle(trackerItem) : trackerItemId;
-          const itemId = trackerItem?.issueKey || trackerItemId;
-          const lines: string[] = [];
-          lines.push(`implement tracker item ${itemId}: ${title}`);
-          if (trackerItem) {
-            const status = getRecordStatus(trackerItem);
-            const priority = getRecordPriority(trackerItem);
-            const description = getRecordFieldStr(trackerItem, 'description');
-            const meta: string[] = [];
-            if (trackerItem.primaryType) meta.push(`type: ${trackerItem.primaryType}`);
-            if (status) meta.push(`status: ${status}`);
-            if (priority) meta.push(`priority: ${priority}`);
-            if (meta.length > 0) lines.push(meta.join(', '));
-            if (description) lines.push(`\n${description}`);
-          }
-          lines.push(`\nUpdate this tracker item's status when done using tracker_update with id "${itemId}".`);
-          await window.electronAPI.invoke('ai:saveDraftInput', result.id,
-            lines.join('\n'), workspacePath);
-        }
+        await window.electronAPI.invoke('tracker:link-session', {
+          trackerId: trackerContext.trackerLinkId,
+          sessionId: result.id,
+        });
+        await window.electronAPI.invoke(
+          'ai:saveDraftInput',
+          result.id,
+          trackerContext.draftInput,
+          workspacePath,
+        );
 
         // Refresh session list to pick up the new session, then navigate
         await refreshSessionList();
@@ -276,6 +250,40 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       console.error('[TrackerMainView] Failed to launch session:', err);
     }
   }, [workspacePath, refreshSessionList, setSelectedWorkstream, setWindowMode, defaultModel]);
+
+  /** Launch a new isolated worktree session linked to a tracker item. */
+  const handleLaunchWorktree = useCallback((trackerItemId: string) => {
+    const itemsMap = store.get(trackerItemsMapAtom);
+    setPendingWorktreeLaunch(buildTrackerLaunchContext(
+      trackerItemId,
+      itemsMap.get(trackerItemId),
+    ));
+  }, []);
+
+  const handleCreateTrackerWorktree = useCallback(async (
+    options: { baseBranch: string; name?: string },
+  ) => {
+    if (!pendingWorktreeLaunch) return;
+
+    try {
+      const sessionId = await createNewWorktreeSession({
+        ...options,
+        initialDraft: pendingWorktreeLaunch.draftInput,
+      });
+      if (!sessionId) throw new Error('Worktree session was not created');
+
+      await window.electronAPI.invoke('tracker:link-session', {
+        trackerId: pendingWorktreeLaunch.trackerLinkId,
+        sessionId,
+      });
+      await refreshSessionList();
+      handleSwitchToAgentMode(sessionId);
+      setPendingWorktreeLaunch(null);
+    } catch (err) {
+      console.error('[TrackerMainView] Failed to launch worktree:', err);
+      throw err;
+    }
+  }, [createNewWorktreeSession, handleSwitchToAgentMode, pendingWorktreeLaunch, refreshSessionList]);
 
   // Base item sets from atoms
   const activeItems = useAtomValue(trackerItemsByTypeAtom(filterType));
@@ -982,6 +990,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               onSwitchToFilesMode={onSwitchToFilesMode}
               onSwitchToAgentMode={handleSwitchToAgentMode}
               onLaunchSession={handleLaunchSession}
+              onLaunchWorktree={isWorktreesFeatureAvailable && isGitRepo ? handleLaunchWorktree : undefined}
               onArchive={handleArchiveItem}
               onDelete={handleDeleteItem}
               onOpenItem={handleItemSelect}
@@ -1004,6 +1013,15 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               setTimeout(() => setImportStatus(null), 4000);
             }
           }}
+        />
+      )}
+      {workspacePath && pendingWorktreeLaunch && (
+        <WorktreeBaseBranchPicker
+          isOpen
+          workspacePath={workspacePath}
+          initialName={pendingWorktreeLaunch.worktreeName}
+          onCreate={handleCreateTrackerWorktree}
+          onCancel={() => setPendingWorktreeLaunch(null)}
         />
       )}
     </div>
