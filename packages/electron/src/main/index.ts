@@ -43,6 +43,7 @@ import { registerUsageAnalyticsHandlers } from './ipc/UsageAnalyticsHandlers';
 import { registerWorktreeHandlers } from './ipc/WorktreeHandlers';
 import { registerPullRequestHandlers, stopPullRequestPollScheduler } from './ipc/PullRequestHandlers';
 import { registerReadReceiptHandlers } from './ipc/ReadReceiptHandlers';
+import { registerTrackerPersonalStateHandlers } from './ipc/TrackerPersonalStateHandlers';
 import { registerWakeupHandlers } from './ipc/WakeupHandlers';
 import { registerBlitzHandlers } from './ipc/BlitzHandlers';
 import { registerProjectMigrationHandlers } from './ipc/ProjectMigrationHandlers';
@@ -1588,6 +1589,7 @@ app.whenReady().then(async () => {
     registerWorktreeHandlers();
     registerPullRequestHandlers();
     registerReadReceiptHandlers();
+    registerTrackerPersonalStateHandlers();
     registerWakeupHandlers();
     registerBlitzHandlers();
     registerProjectMigrationHandlers();

@@ -156,6 +156,11 @@ export function getMigrations(schemaDir: string): Migration[] {
       name: 'collab_asset_retry_schedule',
       sqlFile: path.join(schemaDir, '0023_collab_asset_retry_schedule.sql'),
     },
+    {
+      version: 24,
+      name: 'tracker_personal_state',
+      sqlFile: path.join(schemaDir, '0024_tracker_personal_state.sql'),
+    },
   ];
 }
 

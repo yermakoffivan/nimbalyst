@@ -2757,6 +2757,29 @@ class PGLiteWorker {
       throw error;
     }
 
+    // Migration: identity-scoped tracker favorites and genuine-open recency
+    // (schema version 24). Mirror of SQLite 0024_tracker_personal_state.sql.
+    try {
+      await this.db.exec(`
+        CREATE TABLE IF NOT EXISTS tracker_personal_state (
+          user_email          TEXT NOT NULL,
+          scope               TEXT NOT NULL,
+          item_id             TEXT NOT NULL,
+          is_favorite         BOOLEAN NOT NULL DEFAULT FALSE,
+          favorite_updated_at BIGINT NOT NULL DEFAULT 0,
+          last_opened_at      BIGINT,
+          updated_at          BIGINT NOT NULL,
+          PRIMARY KEY (user_email, scope, item_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tracker_personal_state_scope
+          ON tracker_personal_state (user_email, scope);
+      `);
+      console.log('[PGLite Worker] tracker_personal_state table created successfully');
+    } catch (error) {
+      console.error('[PGLite Worker] Failed to create tracker_personal_state table:', error);
+      throw error;
+    }
+
     // Migration: shared tracker-type folder navigation (schema version 17).
     // JSONB is selected as a whole column and parsed defensively by consumers.
     // Mirror of SQLite migration 0017_tracker_type_navigation.sql.

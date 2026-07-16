@@ -34,6 +34,7 @@ import { getRelativeTimeString } from '../../utils/dateFormatting';
 import { useTrackerContentCollab } from '../../hooks/useTrackerContentCollab';
 import { useColdPaintFallback } from '../../hooks/useColdPaintFallback';
 import { useMarkTrackerViewed } from '../../hooks/useTrackerUnread';
+import { useRecordTrackerOpened } from '../../hooks/useRecordTrackerOpened';
 import { reconcileExternalFieldChanges } from './trackerDetailFieldSync';
 
 interface TrackerItemDetailProps {
@@ -237,6 +238,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   // Mark this item read while it is open (debounced; refires when a newer
   // version arrives). Clears its unread dot in the list/board views.
   useMarkTrackerViewed(item, workspacePath);
+  useRecordTrackerOpened(item?.id, workspacePath);
 
   // Detect whether this workspace has a team. The team check feeds the
   // content editor mode (collab vs local); the member list feeds the

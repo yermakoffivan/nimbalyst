@@ -21,6 +21,12 @@ import {
   saveTrackerNavigationEntryAtom,
   trackerNavigationEntriesAtom,
 } from '../../store/atoms/trackerNavigation';
+import {
+  favoriteTrackerItemIdsAtom,
+  hydrateTrackerPersonalStateAtom,
+  trackerPersonalStateHydratedAtom,
+  trackerViewedAtByItemIdAtom,
+} from '../../store/atoms/trackerPersonalState';
 
 // Ensure built-in trackers are loaded
 loadBuiltinTrackers();
@@ -82,12 +88,26 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
   const [tagFilter, setTagFilter] = React.useState<string[]>([]);
   const [sourceFilter, setSourceFilter] = React.useState<string[]>([]);
   const [currentIdentity, setCurrentIdentity] = React.useState<TrackerIdentity | null>(null);
+  const favoriteItemIds = useAtomValue(favoriteTrackerItemIdsAtom);
+  const viewedAtByItemId = useAtomValue(trackerViewedAtByItemIdAtom);
+  const personalStateHydrated = useAtomValue(trackerPersonalStateHydratedAtom);
+  const hydratePersonalState = useSetAtom(hydrateTrackerPersonalStateAtom);
 
   useEffect(() => {
+    setCurrentIdentity(null);
+    let cancelled = false;
     window.electronAPI.invoke('document-service:get-current-identity').then((result: any) => {
-      if (result?.success) setCurrentIdentity(result.identity);
+      if (!cancelled && result?.success) setCurrentIdentity(result.identity);
     });
-  }, []);
+    return () => { cancelled = true; };
+  }, [workspacePath]);
+
+  useEffect(() => {
+    void hydratePersonalState({
+      workspacePath: workspacePath ?? undefined,
+      identityEmail: currentIdentity?.email ?? null,
+    });
+  }, [workspacePath, currentIdentity?.email, hydratePersonalState]);
 
   const handleSelectType = useCallback((type: string | 'all') => {
     setModeLayout({ selectedType: type, selectedItemId: null });
@@ -95,12 +115,18 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
 
   const handleToggleFilter = useCallback((filter: TrackerFilterChip) => {
     let current = modeLayout.activeFilters;
+    const wasActive = current.includes(filter);
 
     // "Mine" and "Unassigned" are mutually exclusive
     if (filter === 'mine') current = current.filter(f => f !== 'unassigned');
     if (filter === 'unassigned') current = current.filter(f => f !== 'mine');
+    if (filter === 'recently-updated' || filter === 'recently-viewed' || filter === 'recently-edited-by-others') {
+      current = current.filter((candidate) => ![
+        'recently-updated', 'recently-viewed', 'recently-edited-by-others',
+      ].includes(candidate));
+    }
 
-    const next = current.includes(filter)
+    const next = wasActive
       ? current.filter(f => f !== filter)
       : [...current, filter];
     setModeLayout({ activeFilters: next });
@@ -129,10 +155,13 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
         viewMode: modeLayout.viewMode,
         tagFilter: [],
         groupBy: modeLayout.groupBy,
+        sortBy: modeLayout.sortBy,
+        sortDirection: modeLayout.sortDirection,
+        recentlyViewedDays: modeLayout.recentlyViewedDays,
       },
     };
     saveView(view);
-  }, [modeLayout.selectedType, modeLayout.activeFilters, modeLayout.viewMode, modeLayout.groupBy, saveView]);
+  }, [modeLayout, saveView]);
 
   const handleApplyView = useCallback((view: SavedView) => {
     const def = view.definition;
@@ -141,6 +170,9 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
       activeFilters: def.activeFilters,
       viewMode: def.viewMode,
       groupBy: def.groupBy,
+      sortBy: def.sortBy,
+      sortDirection: def.sortDirection,
+      recentlyViewedDays: def.recentlyViewedDays,
       selectedItemId: null,
     });
   }, [setModeLayout]);
@@ -166,6 +198,11 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
       tagFilter={tagFilter}
       sourceFilter={sourceFilter}
       currentIdentity={currentIdentity}
+      favoriteItemIds={favoriteItemIds}
+      viewedAtByItemId={viewedAtByItemId}
+      personalStateHydrated={personalStateHydrated}
+      recentlyViewedDays={modeLayout.recentlyViewedDays}
+      onRecentlyViewedDaysChange={(days) => setModeLayout({ recentlyViewedDays: days })}
       viewMode={viewMode}
       onSelectType={handleSelectType}
       onToggleFilter={handleToggleFilter}
@@ -194,6 +231,9 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
       sourceFilter={sourceFilter}
       setSourceFilter={setSourceFilter}
       currentIdentity={currentIdentity}
+      favoriteItemIds={favoriteItemIds}
+      viewedAtByItemId={viewedAtByItemId}
+      personalStateHydrated={personalStateHydrated}
     />
   );
 

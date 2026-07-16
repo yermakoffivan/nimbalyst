@@ -46,6 +46,7 @@ import {
   createNewWorktreeSessionActionAtom,
   isGitRepoAtom,
 } from '../../store/actions/sessionHistoryActions';
+import { setTrackerFavoriteAtom } from '../../store/atoms/trackerPersonalState';
 import { WorktreeBaseBranchPicker } from '../AgenticCoding/WorktreeBaseBranchPicker';
 import {
   buildTrackerLaunchContext,
@@ -83,6 +84,9 @@ interface TrackerMainViewProps {
   sourceFilter: string[];
   setSourceFilter: React.Dispatch<React.SetStateAction<string[]>>;
   currentIdentity: TrackerIdentity | null;
+  favoriteItemIds: ReadonlySet<string>;
+  viewedAtByItemId: ReadonlyMap<string, number>;
+  personalStateHydrated: boolean;
 }
 
 export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
@@ -99,9 +103,10 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   sourceFilter,
   setSourceFilter,
   currentIdentity,
+  favoriteItemIds,
+  viewedAtByItemId,
+  personalStateHydrated,
 }) => {
-  const [sortBy, setSortBy] = useState<TrackerSortColumn>('lastIndexed');
-  const [sortDirection, setSortDirection] = useState<TrackerSortDirection>('desc');
   const [searchQuery, setSearchQuery] = useState('');
   const [quickAddType, setQuickAddType] = useState<string | null>(null);
   const [showTagDropdown, setShowTagDropdown] = useState(false);
@@ -129,8 +134,11 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   // Selected item for detail panel
   const modeLayout = useAtomValue(trackerModeLayoutAtom);
   const setModeLayout = useSetAtom(setTrackerModeLayoutAtom);
+  const setFavorite = useSetAtom(setTrackerFavoriteAtom);
   const selectedItemId = modeLayout.selectedItemId;
   const detailPanelWidth = modeLayout.detailPanelWidth;
+  const sortBy = modeLayout.sortBy as TrackerSortColumn;
+  const sortDirection = modeLayout.sortDirection as TrackerSortDirection;
 
   // Column config for the current type (persisted per-type)
   const columnConfigKey = filterType === 'all' ? 'all' : filterType;
@@ -294,10 +302,10 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
     const showArchived = activeFilters.includes('archived');
     return filterTrackerItems(
       showArchived ? archivedItems : activeItems,
-      { activeFilters, tagFilter: [] },
-      { identity: currentIdentity },
+      { activeFilters, tagFilter: [], recentlyViewedDays: modeLayout.recentlyViewedDays },
+      { identity: currentIdentity, favoriteItemIds, viewedAtByItemId },
     );
-  }, [activeItems, archivedItems, activeFilters, currentIdentity]);
+  }, [activeItems, archivedItems, activeFilters, currentIdentity, favoriteItemIds, viewedAtByItemId, modeLayout.recentlyViewedDays]);
 
   const allTags = useMemo(() => buildTrackerTagOptions(baseFilteredItems), [baseFilteredItems]);
 
@@ -320,12 +328,21 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   const showSourceFilter = sourceOptions.some((k) => k !== 'native');
 
   const filteredItems = useMemo(() => {
-    return filterTrackerItems(baseFilteredItems, {
-      activeFilters: [],
+    const showArchived = activeFilters.includes('archived');
+    return filterTrackerItems(showArchived ? archivedItems : activeItems, {
+      activeFilters,
       tagFilter,
       sourceFilter,
-    });
-  }, [baseFilteredItems, tagFilter, sourceFilter]);
+      recentlyViewedDays: modeLayout.recentlyViewedDays,
+    }, { identity: currentIdentity, favoriteItemIds, viewedAtByItemId });
+  }, [activeItems, archivedItems, activeFilters, tagFilter, sourceFilter, modeLayout.recentlyViewedDays, currentIdentity, favoriteItemIds, viewedAtByItemId]);
+
+  const personalStateRequired = activeFilters.includes('favorites') || activeFilters.includes('recently-viewed');
+  const recencyOrderActive = activeFilters.some((filter) => filter === 'recently-updated'
+    || filter === 'recently-viewed' || filter === 'recently-edited-by-others');
+  const handleToggleFavorite = useCallback((itemId: string) => {
+    void setFavorite({ itemId, isFavorite: !favoriteItemIds.has(itemId) });
+  }, [favoriteItemIds, setFavorite]);
 
   const toggleSource = useCallback((key: string) => {
     setSourceFilter((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]));
@@ -896,16 +913,22 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       <div className="flex-1 flex flex-row overflow-hidden min-h-0">
         {/* Table/Kanban (flex-1, shrinks when detail is open) */}
         <div className="flex-1 overflow-hidden min-h-0 min-w-0 relative">
-          {viewMode === 'list' ? (
+          {personalStateRequired && !personalStateHydrated ? (
+            <div className="h-full flex items-center justify-center text-sm text-nim-muted" data-testid="tracker-personal-state-loading">
+              Loading personal tracker state...
+            </div>
+          ) : viewMode === 'list' ? (
             <TrackerTable
               filterType={filterType}
               sortBy={sortBy}
               sortDirection={sortDirection}
               hideTypeTabs={true}
               onSortChange={(column, direction) => {
-                setSortBy(column);
-                setSortDirection(direction);
+                setModeLayout({ sortBy: column, sortDirection: direction });
               }}
+              preserveItemOrder={recencyOrderActive}
+              favoriteItemIds={favoriteItemIds}
+              onToggleFavorite={handleToggleFavorite}
               onSwitchToFilesMode={onSwitchToFilesMode}
               onNewItem={handleNewItem}
               onItemSelect={handleItemSelect}
@@ -927,9 +950,11 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               sortDirection={sortDirection}
               hideTypeTabs={true}
               onSortChange={(column, direction) => {
-                setSortBy(column);
-                setSortDirection(direction);
+                setModeLayout({ sortBy: column, sortDirection: direction });
               }}
+              preserveItemOrder={recencyOrderActive}
+              favoriteItemIds={favoriteItemIds}
+              onToggleFavorite={handleToggleFavorite}
               onSwitchToFilesMode={onSwitchToFilesMode}
               onNewItem={handleNewItem}
               onItemSelect={handleItemSelect}
@@ -951,6 +976,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               onItemSelect={handleItemSelect}
               selectedItemId={selectedItemId}
               overrideItems={filteredItems}
+              favoriteItemIds={favoriteItemIds}
+              onToggleFavorite={handleToggleFavorite}
             />
           ) : (
             <KanbanBoard
@@ -963,6 +990,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               onArchiveItems={handleArchiveItems}
               onDeleteItems={handleDeleteItems}
               onCopyDeepLink={teamOrgId ? handleCopyDeepLink : undefined}
+              favoriteItemIds={favoriteItemIds}
+              onToggleFavorite={handleToggleFavorite}
             />
           )}
 
