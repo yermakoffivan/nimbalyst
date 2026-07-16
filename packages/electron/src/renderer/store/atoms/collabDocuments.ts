@@ -33,6 +33,12 @@ export interface SharedDocument {
   documentId: string;
   title: string;
   documentType: string;
+  /** Optional V2 type metadata; legacy rows are inferred at read time. */
+  metadataVersion?: 2;
+  /** Exact normalized suffix, including the leading dot. */
+  fileExtension?: string;
+  /** Stable owning editor id (built-in or extension id). */
+  editorId?: string;
   createdBy: string;
   createdAt: number;
   updatedAt: number;
@@ -136,11 +142,17 @@ function hasVisibleName(name: string | null | undefined): boolean {
  * as a real one arrives.
  */
 export function mergeSharedDocument(existing: SharedDocument, incoming: SharedDocument): SharedDocument {
-  if (hasVisibleName(incoming.title)) return incoming;
+  const mergedMetadata: SharedDocument = {
+    ...incoming,
+    metadataVersion: incoming.metadataVersion ?? existing.metadataVersion,
+    fileExtension: incoming.fileExtension ?? existing.fileExtension,
+    editorId: incoming.editorId ?? existing.editorId,
+  };
+  if (hasVisibleName(incoming.title)) return mergedMetadata;
   if (hasVisibleName(existing.title)) {
-    return { ...incoming, title: existing.title, decryptFailed: false };
+    return { ...mergedMetadata, title: existing.title, decryptFailed: false };
   }
-  return incoming;
+  return mergedMetadata;
 }
 
 /** NIM-1636: folder counterpart to {@link mergeSharedDocument} (preserves `name`). */
@@ -1055,6 +1067,9 @@ export async function initSharedDocuments(workspacePath: string, retryCount = 0)
             documentId: d.documentId,
             title: d.title,
             documentType: d.documentType,
+            metadataVersion: d.metadataVersion,
+            fileExtension: d.fileExtension,
+            editorId: d.editorId,
             createdBy: d.createdBy,
             createdAt: d.createdAt,
             updatedAt: d.updatedAt,
@@ -1080,6 +1095,9 @@ export async function initSharedDocuments(workspacePath: string, retryCount = 0)
           documentId: d.documentId,
           title: d.title,
           documentType: d.documentType,
+          metadataVersion: d.metadataVersion,
+          fileExtension: d.fileExtension,
+          editorId: d.editorId,
           createdBy: d.createdBy,
           createdAt: d.createdAt,
           updatedAt: d.updatedAt,
@@ -1104,6 +1122,9 @@ export async function initSharedDocuments(workspacePath: string, retryCount = 0)
           documentId: document.documentId,
           title: document.title,
           documentType: document.documentType,
+          metadataVersion: document.metadataVersion,
+          fileExtension: document.fileExtension,
+          editorId: document.editorId,
           createdBy: document.createdBy,
           createdAt: document.createdAt,
           updatedAt: document.updatedAt,

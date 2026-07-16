@@ -160,6 +160,24 @@ describe('mergeSharedDocument / mergeSharedFolder (NIM-1636: per-item broadcasts
     expect(merged.parentFolderId).toBe('f_new');
     expect(merged.updatedAt).toBe(2);
   });
+
+  it('preserves V2 type metadata when a legacy read pass omits the optional fields', () => {
+    const merged = mergeSharedDocument(
+      doc('d1', 'types.d.ts', {
+        documentType: 'code',
+        metadataVersion: 2,
+        fileExtension: '.d.ts',
+        editorId: 'builtin.monaco',
+      }),
+      doc('d1', 'types.d.ts', { documentType: 'code', updatedAt: 2 }),
+    );
+    expect(merged).toMatchObject({
+      metadataVersion: 2,
+      fileExtension: '.d.ts',
+      editorId: 'builtin.monaco',
+      updatedAt: 2,
+    });
+  });
 });
 
 describe('reconcileSharedFolders (NIM-1636: folder name must not go blank)', () => {

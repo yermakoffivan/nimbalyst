@@ -7,7 +7,7 @@
  * the same `onDocumentSelect` path the sidebar uses.
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useAtomValue } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime';
 import type { SharedDocument } from '../../store/atoms/collabDocuments';
@@ -35,6 +35,8 @@ import {
   type SharedDocumentCleanupProgress,
 } from '../../utils/sharedDocumentCleanup';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
+import { getCollaborativeDocumentTypeCatalog } from '../../services/CollaborativeDocumentTypeCatalog';
+import { resolveSharedDocumentTypePresentation } from '../../utils/sharedDocumentTypeMetadata';
 
 interface SharedDocsHomeProps {
   workspacePath: string;
@@ -43,17 +45,12 @@ interface SharedDocsHomeProps {
 
 type AllSort = 'updated' | 'name' | 'type';
 
-/** Material Symbol icon for a shared doc's logical type. */
-function iconForDoc(documentType: string | undefined): string {
-  switch (documentType) {
-    case 'excalidraw':
-    case 'tldraw':
-      return 'draw';
-    case 'mindmap':
-      return 'account_tree';
-    default:
-      return 'description';
-  }
+/** Resolve through the live catalog so unloaded extensions never borrow another editor's icon. */
+export function iconForSharedDocument(doc: SharedDocument): string {
+  return resolveSharedDocumentTypePresentation(
+    doc,
+    getCollaborativeDocumentTypeCatalog(),
+  ).icon;
 }
 
 function docName(doc: SharedDocument): string {
@@ -108,7 +105,7 @@ const DocRow: React.FC<{
     title={doc.title}
   >
     <span className="shrink-0 w-7 h-7 rounded-md bg-[var(--nim-bg-tertiary)] flex items-center justify-center text-[var(--nim-primary)]">
-      <MaterialSymbol icon={iconForDoc(doc.documentType)} size={17} />
+      <MaterialSymbol icon={iconForSharedDocument(doc)} size={17} />
     </span>
     <span className="flex-1 min-w-0 truncate text-[13.5px] text-[var(--nim-text)]">{docName(doc)}</span>
     {freshness && <FreshnessBadge freshness={freshness} />}
@@ -134,7 +131,7 @@ const ChangedCard: React.FC<{
   >
     <div className="flex items-start justify-between mb-2.5">
       <span className="w-[34px] h-[34px] rounded-md bg-[var(--nim-bg-tertiary)] flex items-center justify-center text-[var(--nim-primary)]">
-        <MaterialSymbol icon={iconForDoc(doc.documentType)} size={19} />
+        <MaterialSymbol icon={iconForSharedDocument(doc)} size={19} />
       </span>
       <div className="flex items-center gap-1.5">
         <FreshnessBadge freshness={freshness} />
@@ -165,6 +162,12 @@ const SectionHeader: React.FC<{ icon: string; label: string; right?: React.React
 );
 
 export const SharedDocsHome: React.FC<SharedDocsHomeProps> = ({ workspacePath, onDocumentSelect }) => {
+  const documentTypeCatalog = getCollaborativeDocumentTypeCatalog();
+  const catalogRevision = useSyncExternalStore(
+    documentTypeCatalog.subscribe,
+    documentTypeCatalog.getSnapshot,
+    documentTypeCatalog.getSnapshot,
+  );
   const allDocs = useAtomValue(sharedDocumentsAtom);
   const trashedDocs = useAtomValue(trashedSharedDocumentsAtom);
   const teamSyncStatus = useAtomValue(teamSyncStatusAtom);
@@ -197,14 +200,16 @@ export const SharedDocsHome: React.FC<SharedDocsHomeProps> = ({ workspacePath, o
     } else if (allSort === 'type') {
       copy.sort(
         (a, b) =>
-          (a.documentType ?? '').localeCompare(b.documentType ?? '') ||
+          resolveSharedDocumentTypePresentation(a, documentTypeCatalog).typeLabel.localeCompare(
+            resolveSharedDocumentTypePresentation(b, documentTypeCatalog).typeLabel,
+          ) ||
           docName(a).localeCompare(docName(b)),
       );
     } else {
       copy.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     }
     return copy;
-  }, [allDocs, allSort]);
+  }, [allDocs, allSort, catalogRevision, documentTypeCatalog]);
 
   const cycleSort = () =>
     setAllSort((s) => (s === 'updated' ? 'name' : s === 'name' ? 'type' : 'updated'));
@@ -283,7 +288,7 @@ export const SharedDocsHome: React.FC<SharedDocsHomeProps> = ({ workspacePath, o
             <div className="rounded-lg border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] divide-y divide-[var(--nim-border)]">
               {trashedDocs.map((doc) => (
                 <div key={doc.documentId} className="shared-docs-trash-row flex items-center gap-3 px-3 py-2.5">
-                  <MaterialSymbol icon={iconForDoc(doc.documentType)} size={18} className="text-[var(--nim-text-muted)]" />
+                  <MaterialSymbol icon={iconForSharedDocument(doc)} size={18} className="text-[var(--nim-text-muted)]" />
                   <div className="flex-1 min-w-0">
                     <div className="truncate text-[13.5px] text-[var(--nim-text)]">{docName(doc)}</div>
                     <div className="text-[11.5px] text-[var(--nim-text-faint)]">

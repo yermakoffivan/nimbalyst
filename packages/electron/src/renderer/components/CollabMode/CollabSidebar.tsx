@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { usePostHog } from 'posthog-js/react';
 import { useAtom, useAtomValue } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime';
@@ -57,6 +57,8 @@ import {
   markAllSharedDocsViewed,
   type CollabTreeFilter,
 } from '../../store/atoms/collabDiscovery';
+import { getCollaborativeDocumentTypeCatalog } from '../../services/CollaborativeDocumentTypeCatalog';
+import { resolveSharedDocumentTypePresentation } from '../../utils/sharedDocumentTypeMetadata';
 
 // ---------------------------------------------------------------------------
 // TeamSync status indicator -- shown in the header subtitle slot
@@ -99,6 +101,12 @@ export const CollabSidebar: React.FC<CollabSidebarProps> = ({
   onShowHome,
   homeActive,
 }) => {
+  const documentTypeCatalog = getCollaborativeDocumentTypeCatalog();
+  const catalogRevision = useSyncExternalStore(
+    documentTypeCatalog.subscribe,
+    documentTypeCatalog.getSnapshot,
+    documentTypeCatalog.getSnapshot,
+  );
   const posthog = usePostHog();
   const sharedDocuments = useAtomValue(sharedDocumentsAtom);
   const allSharedDocuments = useAtomValue(allSharedDocumentsAtom);
@@ -889,6 +897,10 @@ export const CollabSidebar: React.FC<CollabSidebarProps> = ({
       }
 
       const isFavorite = favoriteSet.has(node.document.documentId);
+      const typePresentation = resolveSharedDocumentTypePresentation(
+        node.document,
+        documentTypeCatalog,
+      );
 
       return (
         <button
@@ -918,7 +930,7 @@ export const CollabSidebar: React.FC<CollabSidebarProps> = ({
         >
           <span className="file-tree-spacer" />
           <span className="file-tree-icon">
-            <MaterialSymbol icon="description" size={16} />
+            <MaterialSymbol icon={typePresentation.icon} size={16} />
           </span>
           <span className="file-tree-name">{node.name}</span>
           <span
@@ -961,6 +973,8 @@ export const CollabSidebar: React.FC<CollabSidebarProps> = ({
     toggleFolder,
     favoriteSet,
     showUnreadBubbles,
+    catalogRevision,
+    documentTypeCatalog,
   ]);
 
   const selectedFolderLabel = selectedFolderPath ? getCollabNodeName(selectedFolderPath) : 'Shared Docs';

@@ -13,6 +13,22 @@ vi.mock('@nimbalyst/runtime', () => ({
   MaterialSymbol: ({ icon }: { icon: string }) => <span data-icon={icon} />,
 }));
 
+vi.mock('../../../services/CollaborativeDocumentTypeCatalog', () => ({
+  getCollaborativeDocumentTypeCatalog: () => ({
+    subscribe: () => () => {},
+    getSnapshot: () => 0,
+  }),
+}));
+
+vi.mock('../../../utils/sharedDocumentTypeMetadata', () => ({
+  resolveSharedDocumentTypePresentation: () => ({
+    state: 'ready',
+    icon: 'description',
+    typeLabel: 'Markdown',
+    metadata: { metadataVersion: 2, fileExtension: '.md', editorId: 'builtin.lexical' },
+  }),
+}));
+
 afterEach(() => {
   cleanup();
   store.set(allSharedDocumentsAtom, []);

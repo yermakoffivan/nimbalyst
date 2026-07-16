@@ -224,6 +224,12 @@ export interface DocIndexEntry {
   documentId: string;
   title: string;
   documentType: string;
+  /** Optional V2 type metadata; absent on legacy rows. */
+  metadataVersion?: 2;
+  /** Exact normalized suffix, including the leading dot. */
+  fileExtension?: string;
+  /** Stable owning editor id (built-in or extension id). */
+  editorId?: string;
   createdBy: string;
   createdAt: number;
   updatedAt: number;
