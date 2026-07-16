@@ -74,16 +74,26 @@ export interface FilterContext {
   identity?: TrackerIdentity | null;
 }
 
+export type TrackerItemFilterDefinition = Pick<SavedViewDefinition, 'activeFilters' | 'tagFilter'> & {
+  /** Selected provenance keys (`native` or an importer provider id). */
+  sourceFilter?: string[];
+};
+
+/** Provenance key for a record: the importer provider id, or `native`. */
+export function recordSourceKey(record: TrackerRecord): string {
+  const origin = record.system.origin;
+  return origin?.kind === 'external' ? origin.external.providerId : 'native';
+}
+
 /**
  * Apply the row-level predicates of a saved view to a set of items: the `mine`,
- * `unassigned`, and `high-priority` chips, plus the tag filter. This is the pure
- * core of TrackerMainView's filtering. Source-set chips that swap the input list
- * (`archived`) or re-sort/slice it (`recently-updated`) are handled by the
- * caller, since they operate on which items are passed in, not on a predicate.
+ * `unassigned`, `high-priority`, and `recently-updated` chips, plus tag and
+ * source filters. This is the pure core of TrackerMainView's filtering.
+ * `archived` is handled by the caller because it selects the input item set.
  */
 export function filterTrackerItems(
   items: TrackerRecord[],
-  def: Pick<SavedViewDefinition, 'activeFilters' | 'tagFilter'>,
+  def: TrackerItemFilterDefinition,
   ctx: FilterContext = {},
 ): TrackerRecord[] {
   let out = items;
@@ -104,9 +114,46 @@ export function filterTrackerItems(
     });
   }
 
+  if (def.activeFilters.includes('recently-updated')) {
+    const recencyTime = (record: TrackerRecord): number => {
+      const source = record.system.updatedAt || record.system.createdAt || record.system.lastIndexed;
+      const timestamp = source ? new Date(source).getTime() : 0;
+      return Number.isNaN(timestamp) ? 0 : timestamp;
+    };
+    out = [...out]
+      .sort((a, b) => recencyTime(b) - recencyTime(a))
+      .slice(0, 50);
+  }
+
   out = filterTrackerItemsByTags(out, def.tagFilter);
 
+  if (def.sourceFilter && def.sourceFilter.length > 0) {
+    const sources = new Set(def.sourceFilter);
+    out = out.filter((record) => sources.has(recordSourceKey(record)));
+  }
+
   return out;
+}
+
+/**
+ * Count filtered records within a sidebar type or folder scope. The type scope
+ * is applied before the row filters so `recently-updated` matches the selected
+ * type/folder view rather than a workspace-global top 50.
+ */
+export function countFilteredTrackerItemsByTypes(
+  items: TrackerRecord[],
+  types: readonly string[],
+  def: TrackerItemFilterDefinition,
+  ctx: FilterContext = {},
+): number {
+  const wantedTypes = new Set(types);
+  const showArchived = def.activeFilters.includes('archived');
+  const scopedItems = items.filter((record) => (
+    record.archived === showArchived
+    && (wantedTypes.has(record.primaryType) || record.typeTags.some((type) => wantedTypes.has(type)))
+  ));
+
+  return filterTrackerItems(scopedItems, def, ctx).length;
 }
 
 export interface TrackerGroup {

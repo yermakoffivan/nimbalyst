@@ -4,7 +4,7 @@ import { globalRegistry, loadBuiltinTrackers } from '@nimbalyst/runtime/plugins/
 import { TrackerSidebar } from './TrackerSidebar';
 import { TrackerMainView, type ViewMode } from './TrackerMainView';
 import { ResizablePanel } from '../AgenticCoding/ResizablePanel';
-import type { TrackerItemType } from '@nimbalyst/runtime';
+import type { TrackerIdentity, TrackerItemType } from '@nimbalyst/runtime';
 import {
   trackerModeLayoutAtom,
   setTrackerModeLayoutAtom,
@@ -79,6 +79,15 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
   const activeFilters = modeLayout.activeFilters;
   const viewMode = modeLayout.viewMode;
   const sidebarWidth = modeLayout.sidebarWidth;
+  const [tagFilter, setTagFilter] = React.useState<string[]>([]);
+  const [sourceFilter, setSourceFilter] = React.useState<string[]>([]);
+  const [currentIdentity, setCurrentIdentity] = React.useState<TrackerIdentity | null>(null);
+
+  useEffect(() => {
+    window.electronAPI.invoke('document-service:get-current-identity').then((result: any) => {
+      if (result?.success) setCurrentIdentity(result.identity);
+    });
+  }, []);
 
   const handleSelectType = useCallback((type: string | 'all') => {
     setModeLayout({ selectedType: type, selectedItemId: null });
@@ -154,6 +163,9 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
       navigationEntries={navigationEntries}
       selectedType={selectedType}
       activeFilters={activeFilters}
+      tagFilter={tagFilter}
+      sourceFilter={sourceFilter}
+      currentIdentity={currentIdentity}
       viewMode={viewMode}
       onSelectType={handleSelectType}
       onToggleFilter={handleToggleFilter}
@@ -177,6 +189,11 @@ export const TrackerMode: React.FC<TrackerModeProps> = ({
       workspacePath={workspacePath || undefined}
       trackerTypes={trackerTypes}
       onClearSidebarFilters={handleClearFilters}
+      tagFilter={tagFilter}
+      setTagFilter={setTagFilter}
+      sourceFilter={sourceFilter}
+      setSourceFilter={setSourceFilter}
+      currentIdentity={currentIdentity}
     />
   );
 

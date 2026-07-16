@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime';
-import type { TrackerItemType } from '@nimbalyst/runtime';
-import { trackerItemCountByTypeAtom, trackerDataLoadedAtom, trackerItemsArrayAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin';
+import type { TrackerIdentity, TrackerItemType } from '@nimbalyst/runtime';
+import { trackerDataLoadedAtom, trackerItemsArrayAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin';
 import type { TrackerDataModel } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import { generateKeyBetween } from '@nimbalyst/runtime/utils/fractionalIndex';
 import type { TrackerNavigationEntry, TrackerNavigationFolder, TrackerTypePlacement } from '@nimbalyst/runtime/sync';
@@ -14,6 +14,7 @@ import { AlphaBadge } from '../common/AlphaBadge';
 import { FloatingPortal, useFloatingMenu, virtualElement } from '../../hooks/useFloatingMenu';
 import { buildTrackerNavigationTree } from './trackerNavigationTree';
 import { trackerSyncConnectionAtom } from '../../store/atoms/trackerSync';
+import { countFilteredTrackerItemsByTypes } from './trackerSavedViews';
 
 interface TrackerSidebarProps {
   workspacePath?: string;
@@ -22,6 +23,9 @@ interface TrackerSidebarProps {
   navigationEntries: TrackerNavigationEntry[];
   selectedType: string | 'all';
   activeFilters: TrackerFilterChip[];
+  tagFilter: string[];
+  sourceFilter: string[];
+  currentIdentity: TrackerIdentity | null;
   viewMode: ViewMode;
   onSelectType: (type: string | 'all') => void;
   onToggleFilter: (filter: TrackerFilterChip) => void;
@@ -46,10 +50,29 @@ const FILTER_CHIPS: { id: TrackerFilterChip; label: string; icon: string }[] = [
   { id: 'archived', label: 'Archived', icon: 'archive' },
 ];
 
-/** Small component so each sidebar row subscribes to its own atom */
-function SidebarTypeCount({ type }: { type: TrackerItemType }) {
+interface SidebarCountProps {
+  activeFilters: TrackerFilterChip[];
+  tagFilter: string[];
+  sourceFilter: string[];
+  currentIdentity: TrackerIdentity | null;
+}
+
+/** Small component so each sidebar row subscribes to the tracker item store. */
+function SidebarTypeCount({
+  type,
+  activeFilters,
+  tagFilter,
+  sourceFilter,
+  currentIdentity,
+}: SidebarCountProps & { type: TrackerItemType }) {
   const loaded = useAtomValue(trackerDataLoadedAtom);
-  const count = useAtomValue(trackerItemCountByTypeAtom(type));
+  const items = useAtomValue(trackerItemsArrayAtom);
+  const count = useMemo(() => countFilteredTrackerItemsByTypes(
+    items,
+    [type],
+    { activeFilters, tagFilter, sourceFilter },
+    { identity: currentIdentity },
+  ), [items, type, activeFilters, tagFilter, sourceFilter, currentIdentity]);
   // NIM-631: before the tracker atoms finish hydrating, the count map is empty,
   // so populated types would flash "0" during a sync reconnect + renderer
   // reload. Suppress the badge until hydration completes rather than showing a
@@ -58,14 +81,23 @@ function SidebarTypeCount({ type }: { type: TrackerItemType }) {
   return <>{count}</>;
 }
 
-function SidebarFolderCount({ types }: { types: string[] }) {
+function SidebarFolderCount({
+  types,
+  activeFilters,
+  tagFilter,
+  sourceFilter,
+  currentIdentity,
+}: SidebarCountProps & { types: string[] }) {
   const loaded = useAtomValue(trackerDataLoadedAtom);
   const items = useAtomValue(trackerItemsArrayAtom);
+  const count = useMemo(() => countFilteredTrackerItemsByTypes(
+    items,
+    types,
+    { activeFilters, tagFilter, sourceFilter },
+    { identity: currentIdentity },
+  ), [items, types, activeFilters, tagFilter, sourceFilter, currentIdentity]);
   if (!loaded) return null;
-  const wanted = new Set(types);
-  return <>{items.filter((item) =>
-    wanted.has(item.primaryType) || item.typeTags.some((type) => wanted.has(type)),
-  ).length}</>;
+  return <>{count}</>;
 }
 
 export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
@@ -75,6 +107,9 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
   navigationEntries,
   selectedType,
   activeFilters,
+  tagFilter,
+  sourceFilter,
+  currentIdentity,
   viewMode,
   onSelectType,
   onToggleFilter,
@@ -228,7 +263,13 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
       </span>
       <span className="flex-1 text-left truncate">{tracker.displayNamePlural}</span>
       <span className="text-[10px] font-semibold text-nim-faint min-w-[20px] text-right">
-        <SidebarTypeCount type={tracker.type as TrackerItemType} />
+        <SidebarTypeCount
+          type={tracker.type as TrackerItemType}
+          activeFilters={activeFilters}
+          tagFilter={tagFilter}
+          sourceFilter={sourceFilter}
+          currentIdentity={currentIdentity}
+        />
       </span>
     </button>
   );
@@ -579,7 +620,13 @@ export const TrackerSidebar: React.FC<TrackerSidebarProps> = ({
                     </button>
                   )}
                   <span className="text-[10px] font-semibold text-nim-faint min-w-[20px] text-right">
-                    <SidebarFolderCount types={folderTypes.map((row) => row.tracker.type)} />
+                    <SidebarFolderCount
+                      types={folderTypes.map((row) => row.tracker.type)}
+                      activeFilters={activeFilters}
+                      tagFilter={tagFilter}
+                      sourceFilter={sourceFilter}
+                      currentIdentity={currentIdentity}
+                    />
                   </span>
                   <button
                     className="opacity-0 group-hover:opacity-100 text-nim-faint hover:text-nim"

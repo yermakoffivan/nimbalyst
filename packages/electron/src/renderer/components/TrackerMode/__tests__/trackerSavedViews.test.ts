@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import type { TrackerIdentity } from '@nimbalyst/runtime';
 import {
+  countFilteredTrackerItemsByTypes,
   filterTrackerItems,
   groupTrackerItems,
   normalizeViewDefinition,
@@ -26,6 +27,94 @@ function makeItem(
 }
 
 describe('filterTrackerItems', () => {
+  it('counts archived items in a type after applying the active row filters', () => {
+    const identity: TrackerIdentity = {
+      email: 'me@example.com',
+      displayName: 'Me',
+      gitName: null,
+      gitEmail: null,
+    };
+    const matching = {
+      ...makeItem('matching', { owner: 'me@example.com', priority: 'high', tags: ['ui'] }),
+      archived: true,
+      system: {
+        ...makeItem('matching-system', {}).system,
+        origin: {
+          kind: 'external' as const,
+          external: {
+            providerId: 'github-issues',
+            externalId: '1',
+            urn: 'github://owner/repo#1',
+            url: 'https://github.com/owner/repo/issues/1',
+            titleSnapshot: 'Matching issue',
+            importedAt: '2026-07-01T00:00:00.000Z',
+            lastSyncedAt: '2026-07-01T00:00:00.000Z',
+          },
+        },
+      },
+    };
+    const items = [
+      matching,
+      makeItem('active', { owner: 'me@example.com', priority: 'high', tags: ['ui'] }),
+      { ...matching, id: 'other-owner', fields: { ...matching.fields, owner: 'other@example.com' } },
+      { ...matching, id: 'low-priority', fields: { ...matching.fields, priority: 'low' } },
+      { ...matching, id: 'other-tag', fields: { ...matching.fields, tags: ['backend'] } },
+      { ...matching, id: 'native', system: { ...matching.system, origin: undefined } },
+      { ...matching, id: 'other-type', primaryType: 'bug', typeTags: ['bug'] },
+    ];
+
+    expect(countFilteredTrackerItemsByTypes(
+      items,
+      ['task'],
+      {
+        activeFilters: ['archived', 'mine', 'high-priority'],
+        tagFilter: ['ui'],
+        sourceFilter: ['github-issues'],
+      },
+      { identity },
+    )).toBe(1);
+  });
+
+  it('counts unassigned items across every type in a folder', () => {
+    const items = [
+      makeItem('task', {}),
+      makeItem('bug', {}, 'bug'),
+      makeItem('assigned', { owner: 'someone@example.com' }, 'bug'),
+      makeItem('secondary-type', {}, 'plan'),
+      makeItem('outside-folder', {}, 'idea'),
+    ];
+    items[3].typeTags.push('task');
+
+    expect(countFilteredTrackerItemsByTypes(
+      items,
+      ['task', 'bug'],
+      { activeFilters: ['unassigned'], tagFilter: [], sourceFilter: [] },
+    )).toBe(3);
+  });
+
+  it('applies the recently-updated cap inside the requested type scope', () => {
+    const tasks = Array.from({ length: 51 }, (_, index) => ({
+      ...makeItem(`task-${index}`, {}),
+      system: {
+        ...makeItem(`task-system-${index}`, {}).system,
+        updatedAt: new Date(2026, 0, index + 1).toISOString(),
+      },
+    }));
+    const newerBugs = Array.from({ length: 50 }, (_, index) => ({
+      ...makeItem(`bug-${index}`, {}, 'bug'),
+      system: {
+        ...makeItem(`bug-system-${index}`, {}).system,
+        updatedAt: new Date(2027, 0, index + 1).toISOString(),
+      },
+    }));
+
+    expect(countFilteredTrackerItemsByTypes(
+      [...newerBugs, ...tasks],
+      ['task'],
+      { activeFilters: ['recently-updated'], tagFilter: [], sourceFilter: [] },
+    )).toBe(50);
+  });
+
   it('filters by the high-priority chip', () => {
     const items = [
       makeItem('1', { priority: 'critical' }),

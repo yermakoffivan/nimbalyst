@@ -4,7 +4,7 @@ import { FloatingPortal } from '@floating-ui/react';
 import { MaterialSymbol } from '@nimbalyst/runtime';
 import type { TrackerIdentity } from '@nimbalyst/runtime';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
-import { getRecordTitle, getRecordPriority, getRecordStatus, getRecordFieldStr, getFieldByRole, isMyRecord } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
+import { getRecordTitle, getRecordPriority, getRecordStatus, getRecordFieldStr } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerRecordAccessors';
 import {
   TrackerTable,
   TrackerTableGrid,
@@ -40,16 +40,11 @@ import { defaultAgentModelAtom } from '../../store/atoms/appSettings';
 import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
 import { store } from '../../store';
 import { useFloatingMenu } from '../../hooks/useFloatingMenu';
-import { buildTrackerTagOptions, filterTrackerItemsByTags } from './trackerTagFilterUtils';
+import { buildTrackerTagOptions } from './trackerTagFilterUtils';
+import { filterTrackerItems, recordSourceKey } from './trackerSavedViews';
 import { useTrackerUnread } from '../../hooks/useTrackerUnread';
 
 export type ViewMode = 'list' | 'table' | 'kanban' | 'tag-board';
-
-/** Provenance key for a record: the importer provider id, or 'native'. */
-function recordSourceKey(record: TrackerRecord): string {
-  const origin = record.system.origin;
-  return origin?.kind === 'external' ? origin.external.providerId : 'native';
-}
 
 /** Human label for a source key without probing the importer (avoids backend start). */
 function sourceKeyLabel(key: string): string {
@@ -75,6 +70,11 @@ interface TrackerMainViewProps {
   workspacePath?: string;
   trackerTypes: TrackerDataModel[];
   onClearSidebarFilters: () => void;
+  tagFilter: string[];
+  setTagFilter: React.Dispatch<React.SetStateAction<string[]>>;
+  sourceFilter: string[];
+  setSourceFilter: React.Dispatch<React.SetStateAction<string[]>>;
+  currentIdentity: TrackerIdentity | null;
 }
 
 export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
@@ -86,13 +86,15 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   workspacePath,
   trackerTypes,
   onClearSidebarFilters,
+  tagFilter,
+  setTagFilter,
+  sourceFilter,
+  setSourceFilter,
+  currentIdentity,
 }) => {
   const [sortBy, setSortBy] = useState<TrackerSortColumn>('lastIndexed');
   const [sortDirection, setSortDirection] = useState<TrackerSortDirection>('desc');
   const [searchQuery, setSearchQuery] = useState('');
-  const [tagFilter, setTagFilter] = useState<string[]>([]);
-  // Source filter: provider ids (e.g. 'github-issues') plus 'native'.
-  const [sourceFilter, setSourceFilter] = useState<string[]>([]);
   const [quickAddType, setQuickAddType] = useState<string | null>(null);
   const [showTagDropdown, setShowTagDropdown] = useState(false);
   const [tagQuery, setTagQuery] = useState('');
@@ -109,14 +111,6 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
     if (!workspacePath) return;
     void initSessionList(workspacePath);
   }, [workspacePath]);
-
-  // Current user identity for "mine" filter
-  const [currentIdentity, setCurrentIdentity] = useState<TrackerIdentity | null>(null);
-  useEffect(() => {
-    window.electronAPI.invoke('document-service:get-current-identity').then((result: any) => {
-      if (result?.success) setCurrentIdentity(result.identity);
-    });
-  }, []);
 
   // Drive the per-item "unread" dots from the local read-receipt store.
   useTrackerUnread(workspacePath, currentIdentity?.email ?? null);
@@ -290,44 +284,11 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   // Apply multi-select filters as intersection
   const baseFilteredItems = useMemo(() => {
     const showArchived = activeFilters.includes('archived');
-    let items = showArchived ? archivedItems : activeItems;
-
-    if (activeFilters.includes('mine') && currentIdentity) {
-      items = items.filter(record => isMyRecord(record, currentIdentity));
-    }
-
-    // "Unassigned" filter: show items with no assignee
-    if (activeFilters.includes('unassigned')) {
-      items = items.filter(record => {
-        const assignee = getFieldByRole(record, 'assignee') as string | undefined;
-        return !assignee;
-      });
-    }
-
-    if (activeFilters.includes('high-priority')) {
-      items = items.filter(record => {
-        const priority = getRecordPriority(record);
-        return priority === 'critical' || priority === 'high';
-      });
-    }
-
-    if (activeFilters.includes('recently-updated')) {
-      // NIM-1559: sort by the item's logical `updatedAt` (real change time),
-      // NOT `lastIndexed` (the re-scan/re-index timestamp). lastIndexed bumps
-      // on every cold-open scan, so sorting by it reshuffled the whole list
-      // on every restart and made "recently updated" meaningless. Mirror the
-      // table's own updatedAt || createdAt || lastIndexed precedence.
-      const recencyTime = (r: TrackerRecord): number => {
-        const src = r.system.updatedAt || r.system.createdAt || r.system.lastIndexed;
-        const t = src ? new Date(src).getTime() : 0;
-        return Number.isNaN(t) ? 0 : t;
-      };
-      items = [...items]
-        .sort((a, b) => recencyTime(b) - recencyTime(a))
-        .slice(0, 50);
-    }
-
-    return items;
+    return filterTrackerItems(
+      showArchived ? archivedItems : activeItems,
+      { activeFilters, tagFilter: [] },
+      { identity: currentIdentity },
+    );
   }, [activeItems, archivedItems, activeFilters, currentIdentity]);
 
   const allTags = useMemo(() => buildTrackerTagOptions(baseFilteredItems), [baseFilteredItems]);
@@ -351,10 +312,11 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   const showSourceFilter = sourceOptions.some((k) => k !== 'native');
 
   const filteredItems = useMemo(() => {
-    const byTags = filterTrackerItemsByTags(baseFilteredItems, tagFilter);
-    if (sourceFilter.length === 0) return byTags;
-    const set = new Set(sourceFilter);
-    return byTags.filter((r) => set.has(recordSourceKey(r)));
+    return filterTrackerItems(baseFilteredItems, {
+      activeFilters: [],
+      tagFilter,
+      sourceFilter,
+    });
   }, [baseFilteredItems, tagFilter, sourceFilter]);
 
   const toggleSource = useCallback((key: string) => {
