@@ -3,7 +3,8 @@
  */
 
 import type { ToolDefinition } from '../tools';
-import type { EffortLevel } from './effortLevels';
+import type { EditorContextItem } from '@nimbalyst/extension-sdk';
+import type { EffortLevel, ThinkingMode } from './effortLevels';
 import type { ToolResult } from './protocols/ProtocolInterface';
 import { ModelIdentifier } from './ModelIdentifier';
 import {
@@ -35,6 +36,10 @@ export interface DocumentContext {
       };
   textSelection?: string;  // Just the selected text (filePath is already on document context)
   textSelectionTimestamp?: number | null;  // For staleness detection
+
+  // Extension-provided selected items from node-like editors (diagrams, CAD,
+  // electronics). Already filtered to non-dismissed items by the renderer.
+  editorContextItems?: EditorContextItem[];
 
   // AI mode at time of message submission (planning vs agent vs auto)
   mode?: 'planning' | 'agent' | 'auto';
@@ -404,6 +409,7 @@ export interface ProviderConfig {
   baseUrl?: string;
   allowedTools?: string[];  // List of allowed tool names, ['*'] for all tools
   effortLevel?: EffortLevel;  // Effort level for Opus 4.6 adaptive reasoning (low/medium/high/max)
+  thinkingMode?: ThinkingMode;  // Extended thinking mode for Claude Agent (enabled/disabled)
   responseFormat?: ProviderResponseFormat;  // Response format constraint (extension chat completions)
   skipLogging?: boolean;  // Skip message logging to DB (extension stateless completions)
 }

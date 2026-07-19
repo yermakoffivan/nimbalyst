@@ -152,8 +152,18 @@ export function registerSettingsHandlers() {
         return getAppSetting(key);
     });
 
-    safeHandle('app-settings:set', (_event, key: string, value: unknown) => {
+    safeHandle('app-settings:set', (event, key: string, value: unknown) => {
         setAppSetting(key, value);
+        // Broadcast to every OTHER window so cross-window state (e.g.
+        // navigation-gutter customization) stays in lockstep without a reload.
+        // Exclude the sender: it already applied the change locally before
+        // invoking, and re-applying its own write would be redundant.
+        const payload = { key, value };
+        for (const win of BrowserWindow.getAllWindows()) {
+            if (win.isDestroyed()) continue;
+            if (win.webContents.id === event.sender.id) continue;
+            win.webContents.send('app-settings:changed', payload);
+        }
     });
 
     // Spellcheck toggle - controls Chromium's built-in spellchecker for all windows
@@ -875,6 +885,9 @@ export function registerSettingsHandlers() {
         if (!account) {
             return { success: false, error: 'Account not found' };
         }
+        if (!StytchAuth.setSyncAccount(personalOrgId)) {
+            return { success: false, error: 'Unable to select sync account' };
+        }
 
         const currentConfig = getSessionSyncConfig();
         if (!currentConfig) {
@@ -1262,6 +1275,16 @@ export function registerSettingsHandlers() {
     safeHandle('stytch:get-accounts', () => {
         ensureStytchInitialized();
         return StytchAuth.getAccounts();
+    });
+
+    safeHandle('stytch:get-sync-account', () => {
+        ensureStytchInitialized();
+        return StytchAuth.getSyncAccount();
+    });
+
+    safeHandle('stytch:set-sync-account', (_event, personalOrgId: string) => {
+        ensureStytchInitialized();
+        return { success: StytchAuth.setSyncAccount(personalOrgId) };
     });
 
     // Check if user is authenticated with Stytch

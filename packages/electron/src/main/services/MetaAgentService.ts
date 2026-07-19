@@ -179,8 +179,8 @@ export class MetaAgentService {
           this.spawnSession(callerSessionId, workspaceId, args),
         getSessionStatus: (_metaSessionId, workspaceId, targetSessionId) =>
           this.getSessionStatusJson(targetSessionId, workspaceId),
-        getSessionResult: (_metaSessionId, workspaceId, targetSessionId) =>
-          this.getSessionResultJson(targetSessionId, workspaceId),
+        getSessionResult: (_metaSessionId, workspaceId, targetSessionId, options) =>
+          this.getSessionResultJson(targetSessionId, workspaceId, options),
         listQueuedPrompts: (_metaSessionId, workspaceId, targetSessionId, options) =>
           this.listQueuedPromptsJson(targetSessionId, workspaceId, options),
         sendPrompt: (_metaSessionId, workspaceId, targetSessionId, prompt) =>
@@ -827,8 +827,17 @@ export class MetaAgentService {
     return JSON.stringify(result, null, 2);
   }
 
-  private async getSessionResultJson(sessionId: string, workspaceId: string): Promise<string> {
-    const data = await this.buildSessionResultData(sessionId, workspaceId);
+  private async getSessionResultJson(
+    sessionId: string,
+    workspaceId: string,
+    options: { includeFullResponse?: boolean } = {}
+  ): Promise<string> {
+    const data = await this.buildSessionResultData(
+      sessionId,
+      workspaceId,
+      undefined,
+      options.includeFullResponse ?? true
+    );
     return JSON.stringify(data, null, 2);
   }
 
@@ -1127,6 +1136,11 @@ export class MetaAgentService {
         `Tool scope: ${result.toolScope} (this child had NO ${denied}). Any claim it ran, built, or tested anything is false; "Files modified" above is the complete list of files it changed.`,
       );
     }
+    if (result.errorMessage) {
+      lines.push(`Error: ${result.errorMessage}`);
+    }
+    // Keep the actionable prompt last so the parent session cannot miss the
+    // question beneath ordinary recap or error text.
     if (result.pendingPrompt) {
       lines.push('');
       lines.push(`ACTION REQUIRED: This session is blocked on an interactive prompt.`);
@@ -1161,9 +1175,6 @@ export class MetaAgentService {
         }
         lines.push(`  response: { "approved": true }`);
       }
-    }
-    if (result.errorMessage) {
-      lines.push(`Error: ${result.errorMessage}`);
     }
     return lines.join('\n');
   }
