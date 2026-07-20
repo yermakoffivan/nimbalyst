@@ -70,11 +70,13 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath 
   const otherChips: Chip[] = [];
 
   // --- Extension-provided items (node-like editors, multi-selection) ---
-  // When the panel knows its document (Files mode) match that file's entry;
-  // otherwise (Collab / Agent panels pass no currentFilePath) fall back to the
-  // most-recently published entry, so a collaborative spreadsheet's selected
-  // cells still surface. getEditorContextEntry handles the undefined fallback.
-  const entry = getEditorContextEntry(currentFilePath);
+  // Strictly scope to the panel's active document. Every mode that can hold a
+  // selection passes its active doc path (Files: active tab; Collab: active
+  // collab tab). Without an explicit, matching path we show nothing rather than
+  // falling back to the most-recent entry — that fallback leaked a previous
+  // mode's selection (e.g. a collab spreadsheet's cells) into an unrelated
+  // panel after a mode switch.
+  const entry = currentFilePath ? getEditorContextEntry(currentFilePath) : null;
   let dismissedCount = 0;
   if (entry) {
     for (const item of entry.items) {
@@ -94,16 +96,16 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath 
   }
 
   // --- Text selection (single) ---
-  // Only the focused editor publishes a selection (it checks DOM focus first),
-  // so the stored selection always belongs to the doc the user just acted in.
-  // When the panel knows its document (Files mode passes currentFilePath), match
-  // strictly. When it doesn't (Collab / Agent panels pass no currentFilePath),
-  // trust the selection and show it.
+  // Scope strictly to the panel's active document (same reasoning as the
+  // extension items above): show the selection only when it belongs to the doc
+  // this panel is focused on, so a selection made in another mode does not leak
+  // into an unrelated chat panel after a mode switch.
   const textSelection = getTextSelection();
   const textMatchesFile =
     !!textSelection &&
     textSelection.text.trim().length > 0 &&
-    (!currentFilePath || textSelection.filePath === currentFilePath);
+    !!currentFilePath &&
+    textSelection.filePath === currentFilePath;
   if (textMatchesFile && textSelection) {
     const preview =
       textSelection.text.length > 60 ? textSelection.text.slice(0, 60) + '…' : textSelection.text;
@@ -267,7 +269,7 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath 
           type="button"
           className="selection-chips-restore"
           onClick={() => {
-            const current = getEditorContextEntry(currentFilePath);
+            const current = currentFilePath ? getEditorContextEntry(currentFilePath) : null;
             if (current) {
               for (const id of Array.from(current.dismissedIds)) {
                 restoreEditorContextItem(id, current.filePath);

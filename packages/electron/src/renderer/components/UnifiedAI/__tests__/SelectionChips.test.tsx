@@ -37,10 +37,17 @@ describe('SelectionChips', () => {
     expect(screen.queryByText('Selection')).toBeNull();
   });
 
-  it('shows any published selection when no currentFilePath prop is passed (collab/agent panels)', () => {
-    // Collab/Agent chat panels pass no currentFilePath; the focused editor is the
-    // only publisher, so the stored selection is trusted and shown.
+  it('does not show a selection when the panel has no currentFilePath (prevents cross-mode leak)', () => {
+    // A panel with no active document (e.g. the agent chat with no editor tab)
+    // must NOT surface a selection made in another mode. Strict scoping: no
+    // currentFilePath -> no chip, even if a selection is stored.
     render(<SelectionChips />);
+    act(() => setTextSelection('selected text', COLLAB_FILE));
+    expect(screen.queryByText('Selection')).toBeNull();
+  });
+
+  it('shows the selection when currentFilePath matches the selection file', () => {
+    render(<SelectionChips currentFilePath={COLLAB_FILE} />);
     expect(screen.queryByText('Selection')).toBeNull();
 
     act(() => setTextSelection('selected text', COLLAB_FILE));
@@ -81,16 +88,26 @@ describe('SelectionChips', () => {
     expect(screen.queryByText('Other file')).toBeNull();
   });
 
-  it('shows extension items with no currentFilePath via the most-recent entry (collab spreadsheet)', () => {
-    // Regression: collab/agent panels pass no currentFilePath. A collaborative
-    // spreadsheet publishes its selected-cell context keyed by the collab doc
-    // path; the chip must still surface it via the store's most-recent fallback.
+  it('shows a collab spreadsheet cell selection when the panel is scoped to that doc', () => {
+    // A collaborative spreadsheet publishes its selected-cell context keyed by
+    // the collab doc path; the collab chat panel scopes to that same path.
+    act(() => {
+      setEditorContextItems(COLLAB_FILE, [{ id: 'c1', label: 'Cells A1:B2', description: '4 cells' }]);
+    });
+
+    render(<SelectionChips currentFilePath={COLLAB_FILE} />);
+    expect(screen.getByText('Cells A1:B2')).toBeTruthy();
+  });
+
+  it('does not leak an extension selection into a panel with no currentFilePath', () => {
+    // Regression: switching from collab (spreadsheet) to agent mode must not
+    // carry the spreadsheet's cell chip into the agent panel.
     act(() => {
       setEditorContextItems(COLLAB_FILE, [{ id: 'c1', label: 'Cells A1:B2', description: '4 cells' }]);
     });
 
     render(<SelectionChips />);
-    expect(screen.getByText('Cells A1:B2')).toBeTruthy();
+    expect(screen.queryByText('Cells A1:B2')).toBeNull();
   });
 
   it('collapses large groups and can expand them', () => {
