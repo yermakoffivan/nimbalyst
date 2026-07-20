@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-20T22:30:35.065Z",
+  "generatedAt": "2026-07-20T22:46:26.014Z",
   "extensions": [
     {
       "id": "com.nimbalyst.astro",
@@ -287,6 +287,53 @@
       "longDescription": "",
       "highlights": [],
       "fileTypes": []
+    },
+    {
+      "id": "com.nimbalyst.electronics",
+      "name": "Electronics Studio",
+      "description": "PCB & controller design: design, simulate, test, and export for manufacturing. Powered by tscircuit + Circuit JSON.",
+      "version": "0.2.1",
+      "author": "Nimbalyst",
+      "categories": [
+        "developer-tools",
+        "diagrams"
+      ],
+      "tags": [
+        "electronics",
+        "pcb",
+        "eda",
+        "tscircuit",
+        "circuit-json",
+        "schematic",
+        "simulation",
+        "gerber"
+      ],
+      "icon": "memory",
+      "screenshots": [],
+      "downloads": 0,
+      "featured": false,
+      "permissions": [
+        "filesystem",
+        "ai"
+      ],
+      "minimumAppVersion": "1.0.0",
+      "downloadUrl": "https://extensions.nimbalyst.com/dl/com.nimbalyst.electronics/0.2.1",
+      "checksum": "bf917323f9eb642988751866a0d44813a49a08f69870ed4c6ca115793ef9956d",
+      "repositoryUrl": "https://github.com/nimbalyst/nimbalyst-electronics",
+      "changelog": "0.2.1: First marketplace release with direct interactive tscircuit viewers, agent-guided circuit authoring, simulation and test workflows, evidence-backed design review, and manufacturing exports.",
+      "tagline": "Design, simulate, test, and manufacture circuits with an AI-driven tscircuit studio",
+      "longDescription": "Electronics Studio turns tscircuit TypeScript and Circuit JSON into an interactive design cockpit with direct schematic, PCB, assembly, and 3D viewers. Build circuits visually or in code, collaborate with selection-aware AI tools, run local logical, analog, and MCU simulations, review evidence-backed readiness guidance, and export BOM, Gerber, KiCad, enclosure, and design-review artifacts with freshness provenance.",
+      "highlights": [
+        "Direct interactive schematic, PCB, assembly, and 3D viewers",
+        "AI-guided circuit authoring with preview and approval gates",
+        "Local logical, analog, AVR, and RP2040 simulation workflows",
+        "Evidence-backed readiness, rule, connectivity, and part reviews",
+        "BOM, Gerber, KiCad, image, netlist, and enclosure exports"
+      ],
+      "fileTypes": [
+        ".circuit.tsx",
+        ".circuit.json"
+      ]
     },
     {
       "id": "com.nimbalyst.excalidraw",
@@ -773,7 +820,7 @@
       "id": "com.nimbalyst.replicad",
       "name": "Replicad CAD",
       "description": "Agentic 3D-CAD editor built on Replicad (OpenCascade.js / OCCT-in-wasm): a real B-rep kernel with fillets, chamfers, STEP import/export, live preview, and AI see-correct tools.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": "Nimbalyst",
       "categories": [
         "code",
@@ -806,10 +853,10 @@
         "ai"
       ],
       "minimumAppVersion": "1.0.0",
-      "downloadUrl": "https://extensions.nimbalyst.com/dl/com.nimbalyst.replicad/0.1.0",
-      "checksum": "11499bfcd64da3edf7cb249761da93253ba45608c0dce80af75cea8683edacfa",
+      "downloadUrl": "https://extensions.nimbalyst.com/dl/com.nimbalyst.replicad/0.1.1",
+      "checksum": "0a4de339f816b90c982423752090c7873166d3f49e3cdadfd50207ad344bdde1",
       "repositoryUrl": "https://github.com/nimbalyst/nimbalyst-replicad",
-      "changelog": "0.1.0: Initial public release with Replicad TypeScript modeling, live OCCT preview, Customizer parameters, STEP import/export, and AI inspection tools.",
+      "changelog": "0.1.1: Interactive shape and face selection, richer inspection and printability tools, smarter code editing, expanded model viewing, and more reliable export workflows.\n0.1.0: Initial public release with Replicad TypeScript modeling, live OCCT preview, Customizer parameters, STEP import/export, and AI inspection tools.",
       "tagline": "Code-CAD with a real B-rep kernel and an AI see-correct loop",
       "longDescription": "Replicad models (*.replicad.ts) get a project-aware split editor: TypeScript on the left, a live B-rep preview on the right, and a Customizer parameter panel. Built on the full OCCT kernel compiled to wasm, it supports fillets/chamfers, STEP import of vendor parts, and STEP/STL/3MF/OBJ export. AI tools compile, render multi-view screenshots, measure geometry, and run printability checks so the agent can see and correct the parts it builds.",
       "highlights": [
