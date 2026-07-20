@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Opening a shared code or calc-sheet document no longer intermittently fails to connect for collaboration.
+- Sorting the sessions list by created date no longer crashes the app, and a bad saved sort preference can no longer lock you out of a workspace.
+- Archiving a workstream now archives its child sessions too, so they no longer linger as active sessions; existing orphaned children are cleaned up on next launch.
 
 ### Removed
 <!-- Removed features go here -->
