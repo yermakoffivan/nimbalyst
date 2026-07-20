@@ -9,15 +9,16 @@ import {
   getActiveEditorContextItems,
   setEditorContextItems,
 } from '../../../stores/editorContextStore';
-
 const FILE = '/test/diagram.excalidraw';
 const OTHER_FILE = '/test/other.excalidraw';
+const COLLAB_FILE = 'collab://org:o:doc:shared.md';
 
 afterEach(() => {
   cleanup();
   clearTextSelection();
   clearEditorContext(FILE);
   clearEditorContext(OTHER_FILE);
+  clearEditorContext(COLLAB_FILE);
   delete (window as any).__mockupFilePath;
   delete (window as any).__mockupSelectedElement;
   delete (window as any).__mockupDrawing;
@@ -33,6 +34,23 @@ describe('SelectionChips', () => {
     expect(screen.getByText('Selection')).toBeTruthy();
 
     fireEvent.click(screen.getByLabelText('Remove Selection from context'));
+    expect(screen.queryByText('Selection')).toBeNull();
+  });
+
+  it('shows any published selection when no currentFilePath prop is passed (collab/agent panels)', () => {
+    // Collab/Agent chat panels pass no currentFilePath; the focused editor is the
+    // only publisher, so the stored selection is trusted and shown.
+    render(<SelectionChips />);
+    expect(screen.queryByText('Selection')).toBeNull();
+
+    act(() => setTextSelection('selected text', COLLAB_FILE));
+    expect(screen.getByText('Selection')).toBeTruthy();
+  });
+
+  it('does not show a selection belonging to a different file when currentFilePath is set', () => {
+    render(<SelectionChips currentFilePath={FILE} />);
+
+    act(() => setTextSelection('selection from another doc', OTHER_FILE));
     expect(screen.queryByText('Selection')).toBeNull();
   });
 
@@ -61,6 +79,18 @@ describe('SelectionChips', () => {
     render(<SelectionChips currentFilePath={FILE} />);
     expect(screen.getByText('Current file')).toBeTruthy();
     expect(screen.queryByText('Other file')).toBeNull();
+  });
+
+  it('shows extension items with no currentFilePath via the most-recent entry (collab spreadsheet)', () => {
+    // Regression: collab/agent panels pass no currentFilePath. A collaborative
+    // spreadsheet publishes its selected-cell context keyed by the collab doc
+    // path; the chip must still surface it via the store's most-recent fallback.
+    act(() => {
+      setEditorContextItems(COLLAB_FILE, [{ id: 'c1', label: 'Cells A1:B2', description: '4 cells' }]);
+    });
+
+    render(<SelectionChips />);
+    expect(screen.getByText('Cells A1:B2')).toBeTruthy();
   });
 
   it('collapses large groups and can expand them', () => {

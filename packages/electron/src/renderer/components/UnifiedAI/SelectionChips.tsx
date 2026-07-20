@@ -70,7 +70,11 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath 
   const otherChips: Chip[] = [];
 
   // --- Extension-provided items (node-like editors, multi-selection) ---
-  const entry = currentFilePath ? getEditorContextEntry(currentFilePath) : null;
+  // When the panel knows its document (Files mode) match that file's entry;
+  // otherwise (Collab / Agent panels pass no currentFilePath) fall back to the
+  // most-recently published entry, so a collaborative spreadsheet's selected
+  // cells still surface. getEditorContextEntry handles the undefined fallback.
+  const entry = getEditorContextEntry(currentFilePath);
   let dismissedCount = 0;
   if (entry) {
     for (const item of entry.items) {
@@ -90,12 +94,16 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath 
   }
 
   // --- Text selection (single) ---
+  // Only the focused editor publishes a selection (it checks DOM focus first),
+  // so the stored selection always belongs to the doc the user just acted in.
+  // When the panel knows its document (Files mode passes currentFilePath), match
+  // strictly. When it doesn't (Collab / Agent panels pass no currentFilePath),
+  // trust the selection and show it.
   const textSelection = getTextSelection();
   const textMatchesFile =
     !!textSelection &&
     textSelection.text.trim().length > 0 &&
-    !!currentFilePath &&
-    textSelection.filePath === currentFilePath;
+    (!currentFilePath || textSelection.filePath === currentFilePath);
   if (textMatchesFile && textSelection) {
     const preview =
       textSelection.text.length > 60 ? textSelection.text.slice(0, 60) + '…' : textSelection.text;
@@ -104,7 +112,7 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath 
       icon: 'text_select_start',
       label: 'Selection',
       tooltip: `Selected text will be included: "${preview}"`,
-      onRemove: clearTextSelection,
+      onRemove: () => clearTextSelection(),
     });
   }
 
@@ -259,7 +267,7 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath 
           type="button"
           className="selection-chips-restore"
           onClick={() => {
-            const current = currentFilePath ? getEditorContextEntry(currentFilePath) : null;
+            const current = getEditorContextEntry(currentFilePath);
             if (current) {
               for (const id of Array.from(current.dismissedIds)) {
                 restoreEditorContextItem(id, current.filePath);

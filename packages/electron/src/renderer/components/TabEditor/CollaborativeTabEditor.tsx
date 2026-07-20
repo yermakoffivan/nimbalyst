@@ -87,6 +87,7 @@ import { dialogRef } from '../../contexts/DialogContext';
 import { customEditorRegistry } from '../CustomEditors';
 import type { CustomEditorRegistration } from '../CustomEditors/types';
 import { useCollabLocalOrigin } from '../../hooks/useCollabLocalOrigin';
+import { useLexicalSelectionContext } from '../../hooks/useLexicalSelectionContext';
 import { markDocViewed } from '../../hooks/useDocUnread';
 import { recordDocOpened } from '../../store/atoms/collabDiscovery';
 import { exportCollabRecoveryPlaintext, getCollabContentAdapter } from '@nimbalyst/collab-adapters';
@@ -261,6 +262,17 @@ export const CollaborativeTabEditor: React.FC<CollaborativeTabEditorProps> = ({
   // Captured Lexical editor instance -- needed by FixedTabHeader plugins
   // (search/replace, the unified diff header, etc.) when the agent applies edits.
   const [lexicalEditor, setLexicalEditor] = useState<any | null>(null);
+
+  // Publish the user's text selection into the AI "+ selection" context, the
+  // same as the non-collab markdown editor. Without this a selection in a
+  // shared document never reached the agent session (only markdown collab docs
+  // have a Lexical surface; code/extension collab branches opt out).
+  useLexicalSelectionContext({
+    editor: lexicalEditor,
+    filePath,
+    isActive,
+    enabled: (activeConfig.documentType ?? 'markdown') === 'markdown',
+  });
 
   useEffect(() => {
     historyControllerRef.current = null;
