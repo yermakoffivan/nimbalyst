@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Shared spreadsheets now show live collaborator presence: each person's selected cell is outlined in their color, and the cell they're editing is highlighted with their name.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
