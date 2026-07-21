@@ -344,13 +344,21 @@ export const ProjectTrustToast: React.FC<ProjectTrustToastProps> = ({
         <div className="project-trust-toast-options mb-4 flex flex-col gap-2">
           {PROJECT_TRUST_CHOICES.map((choice) => {
             const isSelected = selectedChoice === choice;
+            const isSecondaryChoice =
+              choice === 'allow-edits-only' || choice === 'ask-every-time';
 
             return (
               <label
                 key={choice}
-                className={`project-trust-toast-option flex cursor-pointer items-start gap-3 rounded-[10px] border px-3.5 py-3 transition-colors duration-150 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[var(--nim-primary)] ${
+                className={`project-trust-toast-option flex cursor-pointer items-start rounded-[10px] border transition-colors duration-150 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[var(--nim-primary)] ${
+                  isSecondaryChoice
+                    ? 'project-trust-toast-option--secondary gap-2.5 px-3.5 py-2'
+                    : 'gap-3 px-3.5 py-3'
+                } ${
                   isSelected
                     ? 'project-trust-toast-option--selected border-[var(--nim-primary)] bg-[color-mix(in_srgb,var(--nim-primary)_8%,transparent)]'
+                    : isSecondaryChoice
+                    ? 'border-transparent bg-transparent hover:bg-nim-hover'
                     : 'border-nim bg-nim-secondary hover:bg-nim-hover'
                 } ${isSubmitting ? 'cursor-not-allowed opacity-60' : ''}`}
               >
@@ -364,7 +372,9 @@ export const ProjectTrustToast: React.FC<ProjectTrustToastProps> = ({
                   className="sr-only"
                 />
                 <span
-                  className={`project-trust-toast-radio mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border-2 ${
+                  className={`project-trust-toast-radio mt-px flex shrink-0 items-center justify-center rounded-full border-2 ${
+                    isSecondaryChoice ? 'h-4 w-4' : 'h-[18px] w-[18px]'
+                  } ${
                     isSelected
                       ? 'border-[var(--nim-primary)]'
                       : 'border-[var(--nim-text-faint)]'
@@ -372,12 +382,24 @@ export const ProjectTrustToast: React.FC<ProjectTrustToastProps> = ({
                   aria-hidden="true"
                 >
                   {isSelected && (
-                    <span className="project-trust-toast-radio-dot h-2.5 w-2.5 rounded-full bg-nim-primary" />
+                    <span
+                      className={`project-trust-toast-radio-dot rounded-full bg-nim-primary ${
+                        isSecondaryChoice ? 'h-2 w-2' : 'h-2.5 w-2.5'
+                      }`}
+                    />
                   )}
                 </span>
                 <span className="project-trust-toast-option-body min-w-0 flex-1">
                   <span className="project-trust-toast-option-title-row mb-0.5 flex items-center gap-2">
-                    <span className="project-trust-toast-option-title text-sm font-semibold text-nim">
+                    <span
+                      className={`project-trust-toast-option-title ${
+                        isSecondaryChoice
+                          ? `text-[13px] font-medium ${
+                              isSelected ? 'text-nim' : 'text-nim-muted'
+                            }`
+                          : 'text-sm font-semibold text-nim'
+                      }`}
+                    >
                       {PROJECT_TRUST_CHOICE_LABELS[choice]}
                     </span>
                     {choice === 'agent-verified' && (
@@ -386,7 +408,15 @@ export const ProjectTrustToast: React.FC<ProjectTrustToastProps> = ({
                       </span>
                     )}
                   </span>
-                  <span className="project-trust-toast-option-description block text-[12.5px] leading-[1.45] text-nim-muted">
+                  <span
+                    className={`project-trust-toast-option-description block leading-[1.45] ${
+                      isSecondaryChoice
+                        ? `text-[11.5px] ${
+                            isSelected ? 'text-nim-muted' : 'text-nim-faint'
+                          }`
+                        : 'text-[12.5px] text-nim-muted'
+                    }`}
+                  >
                     {choice === 'agent-verified' ? (
                       <>
                         Works without interrupting you;{' '}
