@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Voice Mode now asks for microphone permission on macOS the first time you turn it on, instead of never prompting or prompting during normal use.
 - Claude Agent sessions reduce two observed prompt-cache invalidation paths around session-tag updates and early tool calls; broader context-overhead validation remains in progress.
 - New agent sessions no longer hang on a spinner that never resolves when git status stalls; the session list stays responsive instead of requiring an app restart.
 - Pending permission review buttons now scroll to the correct approval prompt instead of doing nothing.
