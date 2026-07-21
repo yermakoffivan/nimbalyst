@@ -327,7 +327,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - New file menu contribution
 - Lexical node and transformer contribution
 - Claude slash command contribution
-- Settings panel contribution
+- Nested settings panel contribution plus first-class application/project settings routes with project context
 - Tracker importer contribution (`trackerImporters`) — external-source importers backed by a backend module
 - Extension hot reload
 - Extension developer kit with scaffolding

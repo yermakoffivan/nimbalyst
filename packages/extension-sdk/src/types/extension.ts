@@ -11,6 +11,7 @@ import type {
   PanelGutterButtonProps,
   PanelHostProps,
   SettingsPanelContribution,
+  SettingsRouteContribution,
   SettingsPanelProps,
 } from './panel';
 import type { BackendModuleContribution, ExtensionPermissionId } from './permissions';
@@ -387,6 +388,12 @@ export interface ExtensionContributions {
    * Settings panel shown in the Settings screen under "Extensions" section.
    */
   settingsPanel?: SettingsPanelContribution;
+
+  /**
+   * First-class routes shown in the Settings sidebar. Route components are
+   * resolved from the module's `settingsPanel` export namespace.
+   */
+  settingsRoutes?: SettingsRouteContribution[];
 
   /**
    * Document headers that render above editors for matching file types.
@@ -801,8 +808,9 @@ export interface ExtensionModule {
   panels?: Record<string, PanelExport>;
 
   /**
-   * Settings panel component for the Settings screen.
-   * Keys match the `settingsPanel.component` in manifest.json.
+   * Settings components for the Settings screen.
+   * Keys match `settingsPanel.component` and `settingsRoutes[].component` in
+   * manifest.json.
    */
   settingsPanel?: Record<string, ComponentType<SettingsPanelProps>>;
 }
