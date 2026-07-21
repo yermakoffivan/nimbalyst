@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- New agent sessions no longer hang on a spinner that never resolves when git status stalls; the session list stays responsive instead of requiring an app restart.
 - Pending permission review buttons now scroll to the correct approval prompt instead of doing nothing.
 - RTL text typed in the chat composer now displays on the right again; the detected direction is mirrored onto the composer's visible-text overlay, which a transparent-textarea refactor had left stuck on LTR.
 - Pinned Shared Documents tabs now keep their pinned state and tab order after a window reload or app restart.
