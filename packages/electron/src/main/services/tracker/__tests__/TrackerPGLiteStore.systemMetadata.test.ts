@@ -24,6 +24,21 @@ const ACTIVITY = [
     timestamp: 1,
   },
 ];
+const SECOND_COMMENT = {
+  id: 'comment-2',
+  authorIdentity: { email: 'bob@example.com', displayName: 'Bob', gitName: null, gitEmail: null },
+  body: 'also persists',
+  createdAt: 2,
+};
+const SECOND_ACTIVITY = {
+  id: 'activity-2',
+  authorIdentity: { email: 'bob@example.com', displayName: 'Bob', gitName: null, gitEmail: null },
+  action: 'status_changed' as const,
+  field: 'status',
+  oldValue: 'to-do',
+  newValue: 'in-progress',
+  timestamp: 2,
+};
 const LINKED_PULL_REQUESTS = [{ remote: 'nimbalyst/nimbalyst', number: 42 }];
 
 function payload(): TrackerItemPayload {
@@ -119,6 +134,19 @@ describe('TrackerPGLiteStore system metadata projection (PGLite)', () => {
     await store.applyRemoteItem(envelope(2), legacyPayload);
     await expectSystemCollections(db as any);
   });
+
+  it('merges comments and activity when a stale echo lands after a newer local snapshot', async () => {
+    const newerPayload = payload();
+    newerPayload.comments = [...COMMENTS, SECOND_COMMENT];
+    newerPayload.activity = [...ACTIVITY, SECOND_ACTIVITY];
+    await store.applyRemoteItem(envelope(), newerPayload);
+    await store.applyRemoteItem(envelope(2), payload());
+
+    const result = await db.query<{ data: unknown }>('SELECT data FROM tracker_items WHERE id = $1', ['bug-1']);
+    const data = parseData(result.rows[0].data);
+    expect(data.comments).toEqual([...COMMENTS, SECOND_COMMENT]);
+    expect(data.activity).toEqual([...ACTIVITY, SECOND_ACTIVITY]);
+  });
 });
 
 describe('TrackerPGLiteStore system metadata projection (SQLite)', () => {
@@ -160,5 +188,18 @@ describe('TrackerPGLiteStore system metadata projection (SQLite)', () => {
     delete legacyPayload.system.linkedPullRequests;
     await store.applyOptimistic('bug-1', legacyPayload);
     await expectSystemCollections(db as any);
+  });
+
+  it('merges comments and activity when a stale echo lands after a newer local snapshot', async () => {
+    const newerPayload = payload();
+    newerPayload.comments = [...COMMENTS, SECOND_COMMENT];
+    newerPayload.activity = [...ACTIVITY, SECOND_ACTIVITY];
+    await store.applyRemoteItem(envelope(), newerPayload);
+    await store.applyRemoteItem(envelope(2), payload());
+
+    const result = await db.query<{ data: unknown }>('SELECT data FROM tracker_items WHERE id = $1', ['bug-1']);
+    const data = parseData(result.rows[0].data);
+    expect(data.comments).toEqual([...COMMENTS, SECOND_COMMENT]);
+    expect(data.activity).toEqual([...ACTIVITY, SECOND_ACTIVITY]);
   });
 });
