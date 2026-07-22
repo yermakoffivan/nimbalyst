@@ -52,14 +52,20 @@ export const ExtensionSettingsRoutePanel: React.FC<ExtensionSettingsRoutePanelPr
   const { theme } = useTheme();
   const storage = useMemo(() => createExtensionStorage(route.extensionId), [route.extensionId]);
   const callBackendTool = useMemo(
-    () => (toolName: string, args?: Record<string, unknown>) =>
-      window.electronAPI.invoke('extensions:ai-call-backend-tool', {
+    () => (toolName: string, args?: Record<string, unknown>) => {
+      if (route.scope === 'project' && !workspacePath) {
+        return Promise.reject(
+          new Error('Backend tools require a local workspace for this project settings route'),
+        );
+      }
+      return window.electronAPI.invoke('extensions:ai-call-backend-tool', {
         toolName,
         args: args ?? {},
         workspacePath,
         callerExtensionId: route.extensionId,
-      }),
-    [route.extensionId, workspacePath],
+      });
+    },
+    [route.extensionId, route.scope, workspacePath],
   );
   const Component = route.component;
   const projectProps = route.scope === 'project' ? { workspacePath, projectTarget } : {};
