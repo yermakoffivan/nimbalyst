@@ -402,13 +402,11 @@ const WorkstreamHeader: React.FC<{
   workspacePath: string;
   worktreeId?: string | null;
   worktreePath?: string | null;
-  onToggleSidebar: () => void;
-  sidebarVisible: boolean;
   onArchiveStatusChange?: () => void;
   onOpenTerminal?: () => void;
   onCreateNewTerminal?: () => void;
   onShowArchiveDialog?: () => void;
-}> = React.memo(({ workstreamId, workspacePath, worktreeId, worktreePath, onToggleSidebar, sidebarVisible, onArchiveStatusChange, onOpenTerminal, onCreateNewTerminal, onShowArchiveDialog }) => {
+}> = React.memo(({ workstreamId, workspacePath, worktreeId, worktreePath, onArchiveStatusChange, onOpenTerminal, onCreateNewTerminal, onShowArchiveDialog }) => {
   const title = useAtomValue(workstreamTitleAtom(workstreamId));
   const isProcessing = useAtomValue(workstreamProcessingAtom(workstreamId));
   const sessionData = useAtomValue(sessionStoreAtom(workstreamId));
@@ -648,14 +646,6 @@ const WorkstreamHeader: React.FC<{
           <span>{isArchived ? `Unarchive ${getSessionTypeLabel()}` : `Archive ${getSessionTypeLabel()}`}</span>
         </button>
 
-        {/* Toggle files sidebar */}
-        <button
-          className={`workstream-sidebar-toggle w-8 h-8 flex items-center justify-center rounded cursor-pointer border-none bg-transparent ml-2 hover:bg-[var(--nim-bg-hover)] hover:text-[var(--nim-text-muted)] ${sidebarVisible ? 'active text-[var(--nim-primary)]' : 'text-[var(--nim-text-faint)]'}`}
-          onClick={onToggleSidebar}
-          title={sidebarVisible ? 'Hide edited files' : 'Show edited files'}
-        >
-          <MaterialSymbol icon="dock_to_right" size={20} />
-        </button>
       </div>
     </div>
   );
@@ -989,10 +979,6 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
     };
   }, []);
 
-  const handleToggleSidebar = useCallback(() => {
-    toggleSidebar(workstreamId);
-  }, [workstreamId, toggleSidebar]);
-
   // Archive dialog handler
   const handleShowArchiveDialog = useCallback(async () => {
     if (!sessionWorktreeId || !worktreePath) return;
@@ -1300,8 +1286,6 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
           workspacePath={workspacePath}
           worktreeId={sessionWorktreeId}
           worktreePath={worktreePath}
-          onToggleSidebar={handleToggleSidebar}
-          sidebarVisible={sidebarVisible}
           onOpenTerminal={sessionWorktreeId ? handleOpenTerminal : undefined}
           onCreateNewTerminal={sessionWorktreeId ? handleCreateNewTerminal : undefined}
           onShowArchiveDialog={sessionWorktreeId ? handleShowArchiveDialog : undefined}

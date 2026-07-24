@@ -140,6 +140,10 @@ import { TeamManagementApp } from './components/TeamMode';
 import { TerminalBottomPanel } from './components/TerminalBottomPanel';
 import { SessionLaunchPopup } from './components/UnifiedAI/SessionLaunchPopup';
 import { ProjectRail } from './components/ProjectRail';
+import {
+  WindowTopBar,
+  type WindowTopBarPanelControls,
+} from './components/WindowTopBar';
 import { AccountExpiryBanner } from './components/Accounts/AccountExpiryBanner';
 import { organizationDirectoryAtom, personalAccountsAtom } from './store/atoms/settingsDomains';
 import {
@@ -180,7 +184,18 @@ import { setStorageBackend, getExtensionEditorAPI } from '@nimbalyst/runtime';
 import { store, editorDirtyAtom, makeEditorKey } from '@nimbalyst/runtime/store';
 import { extensionPanelAIContextAtom } from './store/atoms/extensionPanels';
 import { setDiffTreeGroupByDirectoryAtom, setAgentFileScopeModeAtom, hydrateFileGutterCollapsedAtom } from './store/atoms/projectState';
-import { toggleSessionHistoryCollapsedAtom, scrollToMessageAtom, initAgentModeLayout } from './store/atoms/agentMode';
+import {
+  toggleSessionHistoryCollapsedAtom,
+  sessionHistoryCollapsedAtom,
+  scrollToMessageAtom,
+  initAgentModeLayout,
+} from './store/atoms/agentMode';
+import {
+  aiChatCollapsedAtomFamily,
+  sidebarCollapsedAtomFamily,
+} from './store/atoms/workspaceLayout';
+import { gitStatusAtom } from './store/atoms/gitOperations';
+import { normalizeGitStatus } from './utils/gitStatus';
 import {
   developerModeAtom,
   setDeveloperFeatureSettingsAtom,
@@ -200,6 +215,7 @@ import {
   showProjectSelectionDialogRequestAtom,
   showSessionImportDialogRequestAtom,
   showTrustToastRequestAtom,
+  toggleAIChatPanelRequestAtom,
 } from './store/atoms/appCommands';
 import { isCollabUri } from './utils/collabUri';
 import {
@@ -552,12 +568,70 @@ export default function App() {
   const organizationDirectory = useAtomValue(organizationDirectoryAtom);
   const setActiveMode = useSetAtom(setWindowModeAtom);
   const toggleAgentCollapsed = useSetAtom(toggleSessionHistoryCollapsedAtom);
+  const agentHistoryCollapsed = useAtomValue(sessionHistoryCollapsedAtom);
+  const filesSidebarCollapsed = useAtomValue(sidebarCollapsedAtomFamily(workspacePath || ''));
+  const filesAIChatCollapsed = useAtomValue(aiChatCollapsedAtomFamily(workspacePath || ''));
+  const toggleAIChatPanelVersion = useAtomValue(toggleAIChatPanelRequestAtom);
+  const gitStatus = useAtomValue(gitStatusAtom);
+  const setGitStatus = useSetAtom(gitStatusAtom);
+  const [gitActionState, setGitActionState] = useState<{
+    busyAction: 'pull' | 'push' | null;
+    feedback: { kind: 'success' | 'error'; message: string } | null;
+  }>({ busyAction: null, feedback: null });
+  const [agentPanelState, setAgentPanelState] = useState({
+    available: false,
+    reviewVisible: false,
+  });
+  const [collabPanelState, setCollabPanelState] = useState({
+    sidebarCollapsed: false,
+    chatCollapsed: false,
+  });
   const updateDeveloperSettings = useSetAtom(setDeveloperFeatureSettingsAtom);
   // Keep a ref for use in callbacks that might have stale closures
   const activeModeStateRef = useRef<ContentMode>(activeMode);
   useEffect(() => {
     activeModeStateRef.current = activeMode;
   }, [activeMode]);
+
+  useEffect(() => {
+    setCollabPanelState({ sidebarCollapsed: false, chatCollapsed: false });
+    setAgentPanelState({ available: false, reviewVisible: false });
+    setGitActionState({ busyAction: null, feedback: null });
+  }, [workspacePath]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setGitStatus(null);
+    if (!workspacePath) return () => {
+      cancelled = true;
+    };
+
+    const refreshGitStatus = async () => {
+      try {
+        const result = await window.electronAPI?.invoke('git:status', workspacePath);
+        if (!cancelled) {
+          setGitStatus(normalizeGitStatus(result));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setGitStatus(null);
+          console.error('[App] Failed to refresh title-bar git status:', error);
+        }
+      }
+    };
+
+    void refreshGitStatus();
+    const unsubscribe = window.electronAPI?.git?.onStatusChanged?.((data) => {
+      if (data.workspacePath === workspacePath) {
+        void refreshGitStatus();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [setGitStatus, workspacePath]);
 
   useEffect(() => {
     if (activeMode === 'pr-review' && !developerMode) {
@@ -875,6 +949,216 @@ export default function App() {
   const agentModeRef = useRef<AgentModeRef>(null);
   const editorModeRef = useRef<EditorModeRef>(null);
   const collabModeRef = useRef<CollabModeRef | null>(null);
+
+  const toggleActiveLeftPane = useCallback(() => {
+    if (isFullscreenPanelActive) return;
+    if (activeMode === 'files') {
+      editorModeRef.current?.toggleSidebarCollapsed();
+    } else if (activeMode === 'agent') {
+      toggleAgentCollapsed();
+    } else if (activeMode === 'collab') {
+      collabModeRef.current?.toggleSidebarCollapsed();
+    }
+  }, [activeMode, isFullscreenPanelActive, toggleAgentCollapsed]);
+
+  const toggleActiveRightPane = useCallback(() => {
+    if (isFullscreenPanelActive) return;
+    if (activeMode === 'files') {
+      editorModeRef.current?.toggleAIChatCollapsed();
+    } else if (activeMode === 'agent') {
+      agentModeRef.current?.toggleReviewPanel();
+    } else if (activeMode === 'collab') {
+      collabModeRef.current?.toggleChatCollapsed();
+    }
+  }, [activeMode, isFullscreenPanelActive]);
+
+  // Route the ApplicationMenu command through the same mode-owned pane action
+  // used by WindowTopBar. Track the request version so React effect replays
+  // cannot toggle the pane twice.
+  const handledAIChatToggleVersionRef = useRef(toggleAIChatPanelVersion);
+  useEffect(() => {
+    if (toggleAIChatPanelVersion === handledAIChatToggleVersionRef.current) return;
+    handledAIChatToggleVersionRef.current = toggleAIChatPanelVersion;
+    toggleActiveRightPane();
+  }, [toggleAIChatPanelVersion, toggleActiveRightPane]);
+
+  const windowTopBarPanelControls = useMemo<WindowTopBarPanelControls | undefined>(() => {
+    if (isFullscreenPanelActive) return undefined;
+    if (activeMode === 'files') {
+      return {
+        left: {
+          label: 'Files sidebar',
+          collapsed: filesSidebarCollapsed,
+          onToggle: toggleActiveLeftPane,
+        },
+        right: {
+          label: 'AI chat',
+          collapsed: filesAIChatCollapsed,
+          onToggle: toggleActiveRightPane,
+        },
+      };
+    }
+    if (activeMode === 'agent') {
+      return {
+        left: {
+          label: 'Session history',
+          collapsed: agentHistoryCollapsed,
+          onToggle: toggleActiveLeftPane,
+        },
+        right: agentPanelState.available ? {
+          label: 'Agent right panel',
+          collapsed: !agentPanelState.reviewVisible,
+          onToggle: toggleActiveRightPane,
+          options: [
+            {
+              id: 'hidden',
+              label: 'Hidden',
+              icon: 'dock_to_left',
+              selected: !agentPanelState.reviewVisible,
+              onSelect: () => {
+                if (agentPanelState.reviewVisible) {
+                  agentModeRef.current?.toggleReviewPanel();
+                }
+              },
+            },
+            {
+              id: 'review',
+              label: 'Review changes',
+              icon: 'difference',
+              selected: agentPanelState.reviewVisible,
+              onSelect: () => {
+                if (!agentPanelState.reviewVisible) {
+                  agentModeRef.current?.toggleReviewPanel();
+                }
+              },
+            },
+          ],
+        } : undefined,
+      };
+    }
+    if (activeMode === 'collab') {
+      return {
+        left: {
+          label: 'Shared documents sidebar',
+          collapsed: collabPanelState.sidebarCollapsed,
+          onToggle: toggleActiveLeftPane,
+        },
+        right: {
+          label: 'Shared documents chat',
+          collapsed: collabPanelState.chatCollapsed,
+          onToggle: toggleActiveRightPane,
+        },
+      };
+    }
+    return undefined;
+  }, [
+    activeMode,
+    agentHistoryCollapsed,
+    agentPanelState,
+    collabPanelState,
+    filesAIChatCollapsed,
+    filesSidebarCollapsed,
+    isFullscreenPanelActive,
+    toggleActiveLeftPane,
+    toggleActiveRightPane,
+  ]);
+
+  const windowTopBarNewSessionControl = useMemo(() => {
+    if (isFullscreenPanelActive && activeFullscreenPanel?.aiSupported) {
+      return {
+        label: 'New AI session',
+        onCreate: () => {
+          void chatSidebarRef.current?.createNewSession();
+        },
+      };
+    }
+    if (activeMode === 'files') {
+      return {
+        label: 'New AI session',
+        onCreate: () => {
+          void editorModeRef.current?.createNewChatSession();
+        },
+      };
+    }
+    if (activeMode === 'collab') {
+      return {
+        label: 'New AI session',
+        onCreate: () => {
+          void collabModeRef.current?.createNewChatSession();
+        },
+      };
+    }
+    return undefined;
+  }, [activeFullscreenPanel?.aiSupported, activeMode, isFullscreenPanelActive]);
+
+  const activeModeLabel = useMemo(() => {
+    const labels: Record<ContentMode, string> = {
+      files: 'Files',
+      agent: 'Agent',
+      tracker: 'Tracker',
+      collab: 'Shared Docs',
+      'pr-review': 'PR Review',
+      settings: 'Settings',
+    };
+    return labels[activeMode];
+  }, [activeMode]);
+
+  const runTitleBarGitAction = useCallback(async (action: 'pull' | 'push') => {
+    if (!workspacePath || gitActionState.busyAction) return;
+    setGitActionState({ busyAction: action, feedback: null });
+    try {
+      const result = await window.electronAPI.invoke(`git:${action}`, workspacePath);
+      if (!result?.success) {
+        throw new Error(result?.error || `Git ${action} failed`);
+      }
+      const refreshedStatus = await window.electronAPI.invoke('git:status', workspacePath);
+      if (store.get(activeWorkspacePathAtom) === workspacePath) {
+        setGitStatus(normalizeGitStatus(refreshedStatus));
+      }
+      setGitActionState({
+        busyAction: null,
+        feedback: {
+          kind: 'success',
+          message: action === 'pull' ? 'Pull completed' : 'Push completed',
+        },
+      });
+    } catch (error) {
+      setGitActionState({
+        busyAction: null,
+        feedback: {
+          kind: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }, [gitActionState.busyAction, setGitStatus, workspacePath]);
+
+  const handleOpenGitLog = useCallback(() => {
+    const panelId = 'com.nimbalyst.git.git-log';
+    const panel = getPanelById(panelId);
+    if (!panel || panel.placement !== 'bottom') {
+      setGitActionState({
+        busyAction: null,
+        feedback: {
+          kind: 'error',
+          message: 'Git Log is not available. Enable the Git extension to open it.',
+        },
+      });
+      return;
+    }
+    setActiveExtensionBottomPanel(panelId);
+    closeTerminalPanel();
+  }, [closeTerminalPanel]);
+
+  const handleOpenGitExtensionSettings = useCallback(() => {
+    setGitActionState({ busyAction: null, feedback: null });
+    store.set(openSettingsCommandAtom, {
+      category: 'installed-extensions',
+      scope: 'application',
+      anchor: 'installed-extension-com.nimbalyst.git',
+      timestamp: Date.now(),
+    });
+  }, []);
 
   const openHistoryForCurrentDocument = useCallback(() => {
     const mode = activeModeStateRef.current;
@@ -1478,6 +1762,7 @@ export default function App() {
     editorModeRef,
     agentModeRef,
     toggleAgentCollapsed,
+    toggleActiveLeftPane,
     openHistoryForCurrentDocument,
     isFullscreenPanelActive,
     exitFullscreenPanel: () => setActiveExtensionPanel(null),
@@ -2107,7 +2392,31 @@ export default function App() {
     />
     <WalkthroughProvider currentMode={activeMode}>
     <TipProvider currentMode={activeMode} workspacePath={workspacePath || undefined}>
-    <div data-layout="root-container" className="h-screen flex flex-row">
+    <div data-layout="root-container" className="h-screen flex flex-col">
+      {workspaceMode && (
+        <WindowTopBar
+          workspaceName={workspaceName || 'Nimbalyst'}
+          activeModeLabel={activeModeLabel}
+          gitStatus={gitStatus}
+          gitActions={{
+            onPull: () => {
+              void runTitleBarGitAction('pull');
+            },
+            onPush: () => {
+              void runTitleBarGitAction('push');
+            },
+            onOpenLog: handleOpenGitLog,
+            onOpenExtensionSettings: handleOpenGitExtensionSettings,
+            gitLogAvailable:
+              getPanelById('com.nimbalyst.git.git-log')?.placement === 'bottom',
+            busyAction: gitActionState.busyAction,
+            feedback: gitActionState.feedback,
+          }}
+          panelControls={windowTopBarPanelControls}
+          newSessionControl={windowTopBarNewSessionControl}
+        />
+      )}
+      <div data-layout="workspace-row" className="flex flex-row flex-1 min-h-0">
       {/* Far-left: project rail (Discord-style) — visible only when
           multi-project mode is enabled in settings. */}
       <ProjectRail />
@@ -2275,6 +2584,7 @@ export default function App() {
                     }
                   }}
                   onSwitchToAgentMode={handleSwitchToAgentMode}
+                  onPanelStateChange={setAgentPanelState}
                 />
               ) : (
                 <div className="flex-1 flex items-center justify-center text-nim-muted">
@@ -2345,6 +2655,7 @@ export default function App() {
                   workspacePath={workspacePath}
                   isActive={activeMode === 'collab'}
                   onFileOpen={handleWorkspaceFileSelect}
+                  onPanelStateChange={setCollabPanelState}
                 />
               )}
             </div>
@@ -2438,6 +2749,7 @@ export default function App() {
           }
           return null;
         })()}
+      </div>
       </div>
 
       {/* Navigation dialogs (QuickOpen, SessionQuickOpen, PromptQuickOpen, ProjectQuickOpen) */}

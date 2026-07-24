@@ -38,7 +38,14 @@ import {
   setViewModeAtom,
   registerWorkstreamSelectedHook,
 } from '../../store';
-import { initWorkstreamState, loadWorkstreamStates, workstreamStateAtom, workstreamActiveChildAtom } from '../../store/atoms/workstreamState';
+import {
+  initWorkstreamState,
+  loadWorkstreamStates,
+  workstreamStateAtom,
+  workstreamActiveChildAtom,
+  workstreamFilesSidebarVisibleAtom,
+  toggleWorkstreamFilesSidebarAtom,
+} from '../../store/atoms/workstreamState';
 import { blitzAnalysisCreatedAtom } from '../../store/atoms/blitz';
 import { initSessionStateListeners, updateSessionStateListenerWorkspace } from '../../store/sessionStateListeners';
 import { initFileStateListeners } from '../../store/listeners/fileStateListeners';
@@ -47,7 +54,10 @@ import { initSessionListListeners } from '../../store/listeners/sessionListListe
 import { initSessionTranscriptListeners } from '../../store/listeners/sessionTranscriptListeners';
 import { initTrayListeners, trayNewSessionRequestAtom } from '../../store/listeners/trayListeners';
 import { initDeepLinkListeners } from '../../store/listeners/deepLinkListeners';
-import { requestOpenSessionAtom } from '../../store/atoms/agentMode';
+import {
+  requestOpenSessionAtom,
+  toggleSessionHistoryCollapsedAtom,
+} from '../../store/atoms/agentMode';
 import { fetchSessionSharesAtom } from '../../store';
 import { BlitzDialog } from '../BlitzDialog/BlitzDialog';
 import { MetaAgentMode } from '../MetaAgentMode/MetaAgentMode';
@@ -64,7 +74,6 @@ import {
   addSessionToWorktreeActionAtom,
 } from '../../store/actions/sessionHistoryActions';
 import { defaultAgentModelAtom } from '../../store/atoms/appSettings';
-
 export interface AgentModeRef {
   createNewSession: (initialDraft?: string) => Promise<string | undefined>;
   createNewWorktreeSession: (options?: { baseBranch?: string; name?: string }) => Promise<void>;
@@ -73,6 +82,7 @@ export interface AgentModeRef {
   reopenLastClosedSession: () => void;
   nextTab: () => void;
   previousTab: () => void;
+  toggleReviewPanel: () => void;
 }
 
 export interface AgentModeProps {
@@ -84,6 +94,7 @@ export interface AgentModeProps {
   onReady?: () => void;
   onSwitchToAgentMode?: (planDocumentPath?: string, sessionId?: string) => void;
   onOpenSessionInChat?: (sessionId: string) => void;
+  onPanelStateChange?: (state: { available: boolean; reviewVisible: boolean }) => void;
 }
 
 /**
@@ -105,6 +116,7 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
   onReady,
   onSwitchToAgentMode,
   onOpenSessionInChat,
+  onPanelStateChange,
 }, ref) {
   // Ref to the workstream panel for closing tabs
   const workstreamPanelRef = useRef<AgentWorkstreamPanelRef>(null);
@@ -126,10 +138,34 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
   // Layout state from atoms
   const historyWidth = useAtomValue(sessionHistoryWidthAtom);
   const historyCollapsed = useAtomValue(sessionHistoryCollapsedAtom);
+  const toggleHistoryCollapsed = useSetAtom(toggleSessionHistoryCollapsedAtom);
 
   // Selection state
   const selectedWorkstream = useAtomValue(selectedWorkstreamAtom(workspacePath));
+  const selectedWorkstreamId = selectedWorkstream?.id ?? null;
   const setSelectedWorkstream = useSetAtom(setSelectedWorkstreamAtom);
+  const toggleFilesSidebar = useSetAtom(toggleWorkstreamFilesSidebarAtom);
+  const reviewPanelVisible = useAtomValue(
+    workstreamFilesSidebarVisibleAtom(selectedWorkstreamId ?? '__no_workstream__'),
+  );
+  const selectedAgentRoleAtom = useMemo(
+    () => (selectedWorkstreamId ? sessionAgentRoleAtom(selectedWorkstreamId) : atom<'standard'>('standard')),
+    [selectedWorkstreamId]
+  );
+  const selectedAgentRole = useAtomValue(selectedAgentRoleAtom);
+  const isSelectedMetaAgent = selectedWorkstreamId !== null && selectedAgentRole === 'meta-agent';
+
+  useEffect(() => {
+    onPanelStateChange?.({
+      available: selectedWorkstreamId !== null && !isSelectedMetaAgent,
+      reviewVisible: selectedWorkstreamId !== null && !isSelectedMetaAgent && reviewPanelVisible,
+    });
+  }, [
+    isSelectedMetaAgent,
+    onPanelStateChange,
+    reviewPanelVisible,
+    selectedWorkstreamId,
+  ]);
 
   // Layout setters
   const setHistoryWidth = useSetAtom(setSessionHistoryWidthAtom);
@@ -513,10 +549,18 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
     previousTab: () => {
       // TODO: Implement tab navigation
     },
+    toggleReviewPanel: () => {
+      if (selectedWorkstreamId && !isSelectedMetaAgent) {
+        toggleFilesSidebar(selectedWorkstreamId);
+      }
+    },
   }), [
     dispatchCreateNewSession,
     dispatchCreateNewWorktreeSession,
     dispatchOpenSessionInTab,
+    isSelectedMetaAgent,
+    selectedWorkstreamId,
+    toggleFilesSidebar,
   ]);
 
   // Handle worktree archived - refresh the session list to show updated state
@@ -524,15 +568,6 @@ export const AgentMode = forwardRef<AgentModeRef, AgentModeProps>(function Agent
     // console.log('[AgentMode] Worktree archived, refreshing sessions');
     refreshSessions();
   }, [refreshSessions]);
-
-  // Check if the selected session is a meta-agent
-  const selectedWorkstreamId = selectedWorkstream?.id ?? null;
-  const selectedAgentRoleAtom = useMemo(
-    () => (selectedWorkstreamId ? sessionAgentRoleAtom(selectedWorkstreamId) : atom<'standard'>('standard')),
-    [selectedWorkstreamId]
-  );
-  const selectedAgentRole = useAtomValue(selectedAgentRoleAtom);
-  const isSelectedMetaAgent = selectedWorkstreamId !== null && selectedAgentRole === 'meta-agent';
 
   // Subscribe to the session quick-open request signal. SessionHistory bumps
   // `sessionQuickOpenRequestedAtom` when the user clicks the quick-search

@@ -532,6 +532,19 @@ export const toggleSessionHistoryCollapsedAtom = atom(
   }
 );
 
+/** Expand session history without toggling it closed if the action is repeated. */
+export const ensureSessionHistoryVisibleAtom = atom(
+  null,
+  (get, set) => {
+    const layout = get(agentModeLayoutAtom).sessionHistoryLayout;
+    if (!layout.collapsed) return;
+    set(setSessionHistoryLayoutAtom, {
+      collapsed: false,
+      width: layout.preCollapseWidth ?? DEFAULT_SESSION_HISTORY_LAYOUT.width,
+    });
+  },
+);
+
 // ============================================================
 // Initialization
 // ============================================================

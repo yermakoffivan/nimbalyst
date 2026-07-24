@@ -25,6 +25,7 @@ export interface ChatSidebarRef {
   focusInput: () => void;
   insertPrompt: (text: string) => void;
   loadSession: (sessionId: string) => void;
+  createNewSession: () => Promise<void>;
 }
 
 export interface ChatSidebarProps {
@@ -87,6 +88,29 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(({
     }));
   }, [sessionList]);
 
+  const handleNewSession = useCallback(async () => {
+    const newSessionId = crypto.randomUUID();
+    // Parse provider from defaultModel using ModelIdentifier
+    const modelId = defaultModel ? ModelIdentifier.tryParse(defaultModel) : null;
+    const provider = modelId?.provider || 'claude-code';
+    const result = await window.electronAPI.invoke(
+      'sessions:create',
+      {
+        session: {
+          id: newSessionId,
+          provider,
+          model: defaultModel,
+          title: 'Chat',
+        },
+        workspaceId: workspacePath,
+      }
+    );
+    if (result?.success) {
+      setSessionId(newSessionId);
+      refreshSessions();
+    }
+  }, [workspacePath, refreshSessions, defaultModel]);
+
   // Expose methods through ref
   useImperativeHandle(ref, () => ({
     focusInput: () => {
@@ -106,7 +130,8 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(({
     loadSession: (id: string) => {
       setSessionId(id);
     },
-  }), []);
+    createNewSession: handleNewSession,
+  }), [handleNewSession]);
 
   useEffect(() => {
     if (isCollapsed || isLoading || !sessionId) return;
@@ -222,29 +247,6 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(({
     setSessionId(selectedSessionId);
   }, []);
 
-  const handleNewSession = useCallback(async () => {
-    const newSessionId = crypto.randomUUID();
-    // Parse provider from defaultModel using ModelIdentifier
-    const modelId = defaultModel ? ModelIdentifier.tryParse(defaultModel) : null;
-    const provider = modelId?.provider || 'claude-code';
-    const result = await window.electronAPI.invoke(
-      'sessions:create',
-      {
-        session: {
-          id: newSessionId,
-          provider,
-          model: defaultModel,
-          title: 'Chat',
-        },
-        workspaceId: workspacePath,
-      }
-    );
-    if (result?.success) {
-      setSessionId(newSessionId);
-      refreshSessions();
-    }
-  }, [workspacePath, refreshSessions, defaultModel]);
-
   const handleDeleteSession = useCallback(async (sessionIdToDelete: string) => {
     await window.electronAPI.invoke('session:delete', sessionIdToDelete);
     refreshSessions();
@@ -336,26 +338,15 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(({
           onOpenSessionManager={onSwitchToAgentMode}
           className="flex-1"
         />
-        <div className="flex items-center gap-1 shrink-0">
-          {onSwitchToAgentMode && (
-            <button
-              className="chat-sidebar-maximize-button flex items-center justify-center w-7 h-7 rounded-md text-nim-muted border-none cursor-pointer transition-colors duration-150 hover:bg-nim-bg-active hover:text-nim bg-transparent"
-              onClick={() => onSwitchToAgentMode(sessionId ?? undefined)}
-              title="Open in agent mode"
-            >
-              <MaterialSymbol icon="zoom_out_map" size={16} />
-            </button>
-          )}
+        {onSwitchToAgentMode && (
           <button
-            className="chat-sidebar-new-button flex items-center gap-1 px-3 py-1.5 rounded-md text-[0.8125rem] font-medium bg-nim-primary text-nim-on-primary border-none cursor-pointer transition-opacity duration-150 hover:opacity-90"
-            onClick={handleNewSession}
-            title="Start new conversation"
-            aria-label="Start new conversation"
+            className="chat-sidebar-maximize-button flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-nim-muted border-none cursor-pointer transition-colors duration-150 hover:bg-nim-bg-active hover:text-nim bg-transparent"
+            onClick={() => onSwitchToAgentMode(sessionId ?? undefined)}
+            title="Open in agent mode"
           >
-            <MaterialSymbol icon="add" size={16} />
-            <span className="chat-sidebar-new-label">New</span>
+            <MaterialSymbol icon="zoom_out_map" size={16} />
           </button>
-        </div>
+        )}
       </div>
 
       <SessionTranscript
