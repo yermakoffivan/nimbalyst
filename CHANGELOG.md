@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Agent-mode document embeds now recover when their target file is created after the document opens.
+- Claude Code now works when its config directory is set to a non-default location: the usage meter finds your login instead of showing "Authentication expired" indefinitely, and session history, settings, plugins, custom commands, and skills all read from the right place. Codex usage now follows a relocated Codex home the same way.
 - Automations no longer rerun the same scheduled occurrence after restarting while a run is waiting or fails.
 - Voice Mode now explains blocked or missing microphones on Windows and links directly to microphone privacy settings.
 

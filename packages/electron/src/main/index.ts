@@ -200,6 +200,7 @@ import { TrayManager } from './tray/TrayManager';
 import { pathToFileURL } from 'url';
 import { registerLinuxAppImageProtocolHandler } from './services/LinuxProtocolRegistration';
 import { installWindowOpenGuard } from './window/windowOpenGuard';
+import { resolveClaudeConfigDir } from '@nimbalyst/runtime/ai/server/providers/claudeCode/claudeConfigDir';
 
 // Register before any startup path can create a partition session. Browsed web
 // content stays microphone-denied even after Voice Mode receives an OS grant.
@@ -382,8 +383,8 @@ function checkClaudeCodeInstallationOnFirstLaunch(): void {
     }
 
     try {
-        // Check for Claude settings directory (~/.claude/)
-        const claudeSettingsDir = path.join(os.homedir(), '.claude');
+        // Check for the user-level Claude config directory
+        const claudeSettingsDir = resolveClaudeConfigDir();
         const hasClaudeInstalled = existsSync(claudeSettingsDir);
 
         logger.main.info(`First launch Claude Code check: hasClaudeInstalled=${hasClaudeInstalled}`);
