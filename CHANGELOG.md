@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 <!-- New features go here -->
 - Sharing a markdown document to your team now offers to share the documents it embeds, and teammates see those embeds live inline.
+- Voice agents can inspect the current Nimbalyst view, selected file, and active session, and capture the app window with explicit permission.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
